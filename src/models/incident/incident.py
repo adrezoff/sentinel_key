@@ -1,4 +1,4 @@
-"""``Incident`` — confirmed or high-probability credential leak (table ``incidents``)."""
+"""``Incident`` — подтверждённая или высоковероятная утечка credentials (таблица ``incidents``)."""
 
 from __future__ import annotations
 
@@ -17,6 +17,8 @@ _FINGERPRINT_SIZE = 32
 
 
 class IncidentStatus(IntEnum):
+    """Жизненный цикл инцидента. Из закрытых статусов возможен только reopen → OPEN."""
+
     OPEN = 1
     ACKNOWLEDGED = 2
     REMEDIATED = 3
@@ -50,6 +52,12 @@ _RESOLVED_STATUSES = frozenset({IncidentStatus.REMEDIATED, IncidentStatus.FALSE_
 
 @dataclass(slots=True)
 class Incident:
+    """Инцидент по секрету в репозитории. Дедуп: ``UNIQUE(repository_id, fingerprint)``.
+
+    Статус и severity меняются только через методы модели; каждый вызов даёт ``IncidentEvent``.
+    Сырого секрета нет — только ``evidence_masked``.
+    """
+
     repository_id: int
     fingerprint: bytes
     secret_type: SecretType
@@ -86,6 +94,7 @@ class Incident:
         *,
         now: datetime | None = None,
     ) -> IncidentEvent:
+        """Сменить статус по автомату и вернуть событие ``STATUS_CHANGED`` / ``REOPENED``."""
         allowed = TRANSITIONS.get(self.status, frozenset())
         if new not in allowed:
             raise InvalidTransition(self.status, new, entity="Incident")
@@ -118,6 +127,7 @@ class Incident:
         note: str | None = None,
         now: datetime | None = None,
     ) -> IncidentEvent:
+        """Повысить критичность (только вверх) и вернуть ``SEVERITY_RAISED``."""
         if new <= self.severity:
             raise ValueError(f"severity can only increase: {self.severity!r} → {new!r}")
         when = now if now is not None else utc_now()
@@ -139,6 +149,7 @@ class Incident:
         *,
         now: datetime | None = None,
     ) -> Occurrence:
+        """Добавить обнаружение по уже сохранённому кандидату (нужен ``candidate.id``)."""
         when = now if now is not None else utc_now()
         candidate_id = candidate.id
         if candidate_id is None:

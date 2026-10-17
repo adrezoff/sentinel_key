@@ -1,4 +1,4 @@
-"""``idempotency_key = sha256(...)[:16]`` (``docs/models.md`` §3.4)."""
+"""Правила ``idempotency_key = sha256(...)[:16]`` (``docs/models.md`` §3.4)."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ KEY_SIZE = 16
 
 
 def short_key(*parts: object) -> bytes:
+    """Собрать 16-байтный ключ из типизированных частей (длина + payload для каждой)."""
     digest = hashlib.sha256()
     for part in parts:
         payload = _encode(part)
@@ -41,8 +42,10 @@ def _encode(part: object) -> bytes:
 
 
 def key_for_repository_scan(repository_id: int, nonce: bytes) -> bytes:
+    """Ключ для корневой задачи ``REPOSITORY_SCAN`` (уникален за счёт ``nonce``)."""
     return short_key(TaskKind.REPOSITORY_SCAN, repository_id, nonce)
 
 
 def key_for_commit_analysis(repository_id: int, commit_ids: Sequence[int]) -> bytes:
+    """Ключ для ``COMMIT_ANALYSIS``: набор ``commit_ids`` нормализуется сортировкой."""
     return short_key(TaskKind.COMMIT_ANALYSIS, repository_id, tuple(sorted(commit_ids)))

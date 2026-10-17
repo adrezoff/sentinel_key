@@ -1,7 +1,7 @@
-"""Feed / work-unit models (tasks, results, scan payloads).
+"""Модели ленты задач (tasks, results, payload скана).
 
-AI_VALIDATION payload/output registration is owned by the ai_validation track.
-``TaskKind.AI_VALIDATION`` stays reserved so numeric values never change.
+Регистрация payload/output ``AI_VALIDATION`` — в треке ai_validation.
+``TaskKind.AI_VALIDATION`` зарезервирован, чтобы числовые значения не менялись.
 """
 
 from .commit_analysis_output import CommitAnalysisOutput

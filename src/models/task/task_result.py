@@ -1,4 +1,4 @@
-"""``TaskResult`` — at most one per task (table ``task_results``)."""
+"""``TaskResult`` — не более одного результата на задачу (таблица ``task_results``)."""
 
 from __future__ import annotations
 
@@ -12,11 +12,13 @@ from .commit_analysis_output import CommitAnalysisOutput
 from .scan_summary import ScanSummary
 from .task_error import ErrorCode, TaskError
 
-# AiValidationOutput is added by the ai_validation track when that kind is registered.
+# AiValidationOutput появится в треке ai_validation вместе с регистрацией kind.
 TaskOutput = Union[ScanSummary, CommitAnalysisOutput]
 
 
 class Outcome(IntEnum):
+    """Исход выполнения: полный успех, частичный (напр. LLM недоступен) или провал."""
+
     OK = 1
     PARTIAL = 2
     FAILED = 3
@@ -24,6 +26,8 @@ class Outcome(IntEnum):
 
 @dataclass(slots=True)
 class TaskResult:
+    """Итог задачи: outcome, типизированный output и опциональная ошибка/метрики."""
+
     task_id: int
     outcome: Outcome
     created_at: datetime = field(default_factory=utc_now)
@@ -35,6 +39,7 @@ class TaskResult:
 
     @property
     def error(self) -> TaskError | None:
+        """Ошибка результата как value object, либо ``None``."""
         if self.error_code is None:
             return None
         return TaskError(
@@ -44,6 +49,7 @@ class TaskResult:
         )
 
     def apply_error(self, error: TaskError) -> None:
+        """Записать поля ошибки в результат."""
         self.error_code = error.code
         self.error_message = error.message
         self.error_retryable = error.retryable

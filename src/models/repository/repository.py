@@ -1,4 +1,4 @@
-"""``Repository`` — tracked git repository (table ``repositories``)."""
+"""``Repository`` — отслеживаемый Git-репозиторий (таблица ``repositories``)."""
 
 from __future__ import annotations
 
@@ -10,6 +10,11 @@ from ..common.clock import utc_now
 
 @dataclass(slots=True)
 class Repository:
+    """Репозиторий, по которому система строит запуски сканирования.
+
+    ``location`` — URL или локальный путь (UNIQUE). ``version`` — optimistic lock.
+    """
+
     location: str
     name: str
     id: int | None = None

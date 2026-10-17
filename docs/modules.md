@@ -74,20 +74,22 @@ flowchart LR
 
 ## 3. `git_collector/` — Git Collector
 
-**Назначение.** Единственный модуль, обращающийся к `git`. Отдаёт данные, ничего не интерпретирует.
+**Назначение.** Единственный модуль, достающий историю и diff из VCS. Отдаёт данные, ничего не интерпретирует. Подробности контракта и бэкендов — в [`git_collector.md`](git_collector.md).
 
-**Интерфейс**
-- `list_commits(repo, refs) -> list[CommitInfo]` — SHA (`bytes`), родители, `committed_at`, топологический порядок от старых к новым (`git rev-list --topo-order --reverse`).
-- `get_diff(repo, sha) -> AsyncIterator[FileDiff]` — потоковый разбор `git show`/`diff-tree -p` по файлам.
-- `file_contains_in_head(repo, path, line_matcher) -> bool` — проверка `still_in_head`.
+**Интерфейс.** Протокол `GitCollector` (репозиторий привязан в конструкторе):
+- `list_commits(refs) -> list[CommitInfo]` — SHA (`bytes`), родители, `committed_at`, топологический порядок от старых к новым;
+- `get_diff(sha) -> AsyncIterator[FileDiff]` — потоковый разбор diff по файлам;
+- `file_contains_in_head(path, line_matcher, *, ref=None) -> bool` — проверка `still_in_head`.
 
-**Как работает**
-- Процессы запускаются через `asyncio.create_subprocess_exec` (без shell), с таймаутом; SHA валидируется как hex-строка нужной длины до передачи в команду.
-- Diff читается потоком, не целиком в память. Бинарные файлы и файлы больше `max_file_bytes` пропускаются с записью причины в лог.
-- Merge-коммиты: diff относительно первого родителя, чтобы строки влитой ветки не анализировались повторно (они анализируются в своих коммитах).
-- Параллелизм ограничен `Semaphore(git_workers)`.
+Фабрика `create_git_collector(location, kind=...)`: `LocalGitCollector` (реализован), `GitHubCollector` / `GitLabCollector` (заготовки: mirror + делегирование в local).
 
-**Ошибки.** Недоступен репозиторий/refs → ошибка запуска (`ErrorCode.GIT_ERROR`). Ошибка по одному SHA → коммит `FAILED`, остальные продолжаются. Ошибка по файлу (`DIFF_ERROR`) → файл пропущен.
+**Как работает (local)**
+- Процессы — `asyncio.create_subprocess_exec` (без shell), с таймаутом; SHA валидируется до передачи в argv.
+- Diff читается потоком; бинарные файлы и файлы больше `max_file_bytes` → `FileDiff` с `skip_reason`.
+- Merge-коммиты: diff относительно первого родителя.
+- Параллелизм — `Semaphore(git_workers)` на инстанс.
+
+**Ошибки.** Недоступен репозиторий/refs → `GitCollectorError` (`ErrorCode.GIT_ERROR`). Ошибка по одному SHA → коммит `FAILED` (решает worker). Ошибка/skip по файлу → `DIFF_ERROR` / `skip_reason`, остальные файлы продолжаются.
 
 ---
 

@@ -1,10 +1,9 @@
-"""Registry of task kinds: payload/output types and defaults.
+"""Реестр видов задач: типы payload/output и значения по умолчанию.
 
-Adding a kind: new IntEnum value on ``TaskKind``, payload class, output class,
-then one ``register_task_kind(...)`` call. Workers and storage look up here.
+Новый kind: значение в ``TaskKind``, классы payload/output, затем ``register_task_kind(...)``.
+Workers и storage смотрят сюда.
 
-``TaskKind.AI_VALIDATION`` is reserved (value 3). Register it when AI payload
-and output models land in the ai_validation track.
+``TaskKind.AI_VALIDATION`` зарезервирован (значение 3). Регистрация — в треке ai_validation.
 """
 
 from __future__ import annotations
@@ -21,12 +20,16 @@ from .scan_task_payload import ScanTaskPayload
 
 
 class TaskKind(IntEnum):
+    """Вид задачи в ленте. Числовые значения закреплены."""
+
     REPOSITORY_SCAN = 1
     COMMIT_ANALYSIS = 2
-    AI_VALIDATION = 3  # reserved; registration deferred to ai_validation track
+    AI_VALIDATION = 3  # зарезервировано; регистрация в треке ai_validation
 
 
 class TaskStatus(IntEnum):
+    """Статус задачи. Терминальные: SUCCEEDED, FAILED, CANCELLED."""
+
     QUEUED = 1
     RUNNING = 2
     WAITING_CHILDREN = 3
@@ -36,6 +39,7 @@ class TaskStatus(IntEnum):
 
     @property
     def is_terminal(self) -> bool:
+        """``True``, если статус конечный и задача больше не берётся в работу."""
         return self in TERMINAL_STATUSES
 
 
@@ -43,8 +47,8 @@ TERMINAL_STATUSES: frozenset[TaskStatus] = frozenset(
     {TaskStatus.SUCCEEDED, TaskStatus.FAILED, TaskStatus.CANCELLED}
 )
 
-# status → allowed next statuses. WAITING_CHILDREN is further restricted to
-# REPOSITORY_SCAN in ``Task.transition``.
+# status → допустимые следующие статусы. WAITING_CHILDREN дополнительно
+# ограничен kind=REPOSITORY_SCAN в ``Task.transition``.
 TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
     TaskStatus.QUEUED: frozenset({TaskStatus.RUNNING, TaskStatus.CANCELLED}),
     TaskStatus.RUNNING: frozenset(
@@ -64,6 +68,8 @@ TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
 
 @dataclass(frozen=True, slots=True)
 class TaskKindSpec:
+    """Спецификация вида задачи: типы payload/output, приоритет и лимит попыток."""
+
     kind: TaskKind
     payload_type: type
     output_type: type | None
@@ -75,6 +81,7 @@ _SPECS: dict[TaskKind, TaskKindSpec] = {}
 
 
 def register_task_kind(spec: TaskKindSpec) -> TaskKindSpec:
+    """Зарегистрировать вид задачи. Повторная регистрация того же kind — ошибка."""
     if spec.kind in _SPECS:
         raise ValueError(f"task kind already registered: {spec.kind!r}")
     _SPECS[spec.kind] = spec
@@ -82,6 +89,7 @@ def register_task_kind(spec: TaskKindSpec) -> TaskKindSpec:
 
 
 def spec_for(kind: TaskKind) -> TaskKindSpec:
+    """Вернуть спецификацию зарегистрированного kind."""
     try:
         return _SPECS[kind]
     except KeyError as exc:
@@ -89,14 +97,17 @@ def spec_for(kind: TaskKind) -> TaskKindSpec:
 
 
 def parse_payload(kind: TaskKind, data: dict[str, Any]) -> Any:
+    """Разобрать payload задачи из JSON-dict по типу из реестра."""
     return from_jsonable(spec_for(kind).payload_type, data)
 
 
 def dump_payload(payload: Any) -> dict[str, Any]:
+    """Сериализовать payload в JSON-dict."""
     return to_jsonable(payload)
 
 
 def parse_output(kind: TaskKind, data: dict[str, Any] | None) -> Any:
+    """Разобрать output задачи; ``None`` остаётся ``None``."""
     if data is None:
         return None
     output_type = spec_for(kind).output_type
@@ -106,6 +117,7 @@ def parse_output(kind: TaskKind, data: dict[str, Any] | None) -> Any:
 
 
 def dump_output(output: Any) -> dict[str, Any] | None:
+    """Сериализовать output; ``None`` → ``None``."""
     if output is None:
         return None
     return to_jsonable(output)

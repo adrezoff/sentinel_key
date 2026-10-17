@@ -1,9 +1,11 @@
-"""Shared enumerations used by several models (``docs/models.md`` §2)."""
+"""Общие перечисления, используемые несколькими моделями (``docs/models.md`` §2)."""
 
 from enum import IntEnum, IntFlag
 
 
 class SecretType(IntEnum):
+    """Тип секрета: подсказка детектора и классификация кандидата/инцидента."""
+
     UNKNOWN = 0
     AWS_ACCESS_KEY = 1
     AWS_SECRET_KEY = 2
@@ -20,7 +22,7 @@ class SecretType(IntEnum):
 
 
 class Severity(IntEnum):
-    """Order of values is meaningful (comparisons, one-level bump)."""
+    """Критичность. Порядок значений значим (сравнения ``>``/``<``, повышение на уровень)."""
 
     LOW = 1
     MEDIUM = 2
@@ -29,7 +31,7 @@ class Severity(IntEnum):
 
 
 class DetectorFlags(IntFlag):
-    """Bit mask of which detectors fired. Stored as one SMALLINT column."""
+    """Битовая маска сработавших детекторов. В БД — одна колонка ``SMALLINT``."""
 
     REGEX = 1
     ENTROPY = 2

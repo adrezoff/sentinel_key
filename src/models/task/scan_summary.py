@@ -1,4 +1,4 @@
-"""``ScanSummary`` — output of ``REPOSITORY_SCAN``."""
+"""``ScanSummary`` — результат ``REPOSITORY_SCAN``."""
 
 from dataclasses import dataclass
 
@@ -8,6 +8,8 @@ from .scan_task_payload import ScanMode
 
 @dataclass(frozen=True, slots=True)
 class ScanSummary:
+    """Итоги корневого запуска: коммиты, кандидаты, AI-задачи и инциденты."""
+
     mode: ScanMode
     commits_total: int
     commits_new: int
@@ -20,8 +22,10 @@ class ScanSummary:
     incidents_updated: int
 
     def to_json_dict(self) -> dict:
+        """Сериализация в JSON-совместимый dict."""
         return to_jsonable(self)
 
     @classmethod
     def from_json_dict(cls, data: dict) -> "ScanSummary":
+        """Восстановление из JSON-dict."""
         return from_jsonable(cls, data)
