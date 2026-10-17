@@ -51,6 +51,7 @@ sentinel_key/
     design.md          # исходный дизайн-док
     models.md          # модели и поля
     modules.md         # модули и компоненты
+    git_collector.md   # контракт и бэкенды git_collector
     decisions/         # ADR: выбор библиотек и инструментов
   src/                 # исходники
     models/            # один файл — одна модель; подпакеты repository/task/candidate/incident
