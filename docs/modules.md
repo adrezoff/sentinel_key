@@ -1,0 +1,294 @@
+# Модули и логические компоненты sentinel_key
+
+Исходники — `sentinel_key/src/`, каждый модуль — отдельная папка. Модели и их поля описаны в [`models.md`](models.md); здесь — кто что делает и как. Названия моделей даны в `Code`-формате и соответствуют `models.md`.
+
+## 0. Карта модулей
+
+```
+sentinel_key/src/
+  models/            # классы моделей (по одному файлу на модель)
+  config/            # конфигурационные модели и загрузка конфигурации
+  git_collector/     # получение истории и diff из Git
+  preprocessor/      # diff → добавленные строки → RawCandidate
+  static_analyzer/   # regex, энтропия, контекст, scoring, маршрутизация
+  feed/              # лента задач
+  orchestrator/      # запуск анализа: план, fan-out, завершение
+  workers/           # демоны: commit worker, ai worker
+  ai_validation/     # маскирование, prompt, LLM, разбор вердикта
+  incident_manager/  # решение об инциденте, дедупликация, жизненный цикл
+  storage/           # единственное место с SQL, транзакции
+  observability/     # логи и метрики
+```
+
+```mermaid
+flowchart LR
+    ORCH[orchestrator] --> FEED[(feed + storage)]
+    FEED --> CW[commit worker]
+    CW --> GIT[git_collector]
+    CW --> PRE[preprocessor] --> STA[static_analyzer]
+    STA -->|Candidate + AI-задачи| FEED
+    FEED --> AW[ai worker]
+    AW --> AI[ai_validation]
+    AW --> INC[incident_manager]
+    CW --> INC
+    INC --> FEED
+```
+
+**Правила зависимостей.** Поток данных идёт слева направо; модули обмениваются только классами из `models/`. SQL — только в `storage/`. `static_analyzer` и `preprocessor` — чистые функции без обращения к БД и сети.
+
+---
+
+## 1. `models/`
+
+**Назначение.** Доменные классы: `Repository`, `Commit`, `CommitParent`, `Task`, `TaskResult`, `RawCandidate`, `Candidate`, `AiVerdict`, `Incident`, `Occurrence`, `IncidentEvent`, `OutboxMessage` и общие `SecretType`, `Severity`, `DetectorFlags`.
+
+**Как устроен.**
+- Один файл — одна модель; enum, принадлежащий только этой модели, лежит в её файле, общие — в `models/enums.py`.
+- В моделях живёт только **поведение, зависящее от самой модели**: проверка переходов (`Task.transition`, `Incident.set_status`), расчёт `ScoreBreakdown.total`, `Task.schedule_retry`, валидация `AiVerdict`. Ни SQL, ни сети, ни чтения конфигурации.
+- Любое изменение полей начинается с `docs/models.md`.
+
+---
+
+## 2. `config/`
+
+**Назначение.** Загрузка и валидация конфигурации; классы `ScoringConfig` и `IncidentPolicy`, а также настройки воркеров и лимитов.
+
+**Что конфигурируется (всё имеет значение по умолчанию):**
+- scoring: веса и пороги `low`/`high`;
+- политика инцидентов: `min_ai_confidence`, `trusted_formats`, `min_local_score`, `bump_if_in_head`;
+- размеры очередей worker'а (по умолчанию 100/500), `batch_size` (50);
+- число worker'ов: git (4), cpu-потоки (4), llm (5);
+- `lease_s`, `max_attempts`, базовая задержка backoff;
+- `ai.enabled`, `ai.prompt_version`, таймаут LLM;
+- лимиты: `max_file_bytes`, `max_line_len`, список игнорируемых путей и расширений.
+
+**Принцип:** пороги и коэффициенты не зашиваются в код; конфигурация неизменяема после старта.
+
+---
+
+## 3. `git_collector/` — Git Collector
+
+**Назначение.** Единственный модуль, обращающийся к `git`. Отдаёт данные, ничего не интерпретирует.
+
+**Интерфейс**
+- `list_commits(repo, refs) -> list[CommitInfo]` — SHA (`bytes`), родители, `committed_at`, топологический порядок от старых к новым (`git rev-list --topo-order --reverse`).
+- `get_diff(repo, sha) -> AsyncIterator[FileDiff]` — потоковый разбор `git show`/`diff-tree -p` по файлам.
+- `file_contains_in_head(repo, path, line_matcher) -> bool` — проверка `still_in_head`.
+
+**Как работает**
+- Процессы запускаются через `asyncio.create_subprocess_exec` (без shell), с таймаутом; SHA валидируется как hex-строка нужной длины до передачи в команду.
+- Diff читается потоком, не целиком в память. Бинарные файлы и файлы больше `max_file_bytes` пропускаются с записью причины в лог.
+- Merge-коммиты: diff относительно первого родителя, чтобы строки влитой ветки не анализировались повторно (они анализируются в своих коммитах).
+- Параллелизм ограничен `Semaphore(git_workers)`.
+
+**Ошибки.** Недоступен репозиторий/refs → ошибка запуска (`ErrorCode.GIT_ERROR`). Ошибка по одному SHA → коммит `FAILED`, остальные продолжаются. Ошибка по файлу (`DIFF_ERROR`) → файл пропущен.
+
+---
+
+## 4. `preprocessor/` — модуль предобработки операции
+
+**Назначение.** Из diff коммита получает **добавленные строки** и выделяет из них **потенциальные секретные значения** — `RawCandidate`.
+
+**Вход:** `FileDiff` и `commit_id`. **Выход:** поток `RawCandidate` (содержит сырое значение только в памяти).
+
+**Как работает**
+1. **Парсинг diff.** Берутся только строки `+`. Номер строки вычисляется по hunk-заголовкам `@@ -a,b +c,d @@`. Для каждой строки сохраняется контекст ±N строк (включая неизменённые).
+2. **Фильтрация.** Пропускаются lock-файлы, vendor, minified-файлы, бинарные файлы, строки длиннее `max_line_len` (список — в конфиге).
+3. **Извлечение значений.** Задача — не разбить строку на слова, а выделить структуры:
+   - `KEY = "value"`, `key: value`, `export KEY=value` → `key_name`, `raw_value`;
+   - `Authorization: Bearer …` → `key_name=Authorization`, `secret_type_hint=BEARER_TOKEN`;
+   - URL с credentials (`postgres://user:pass@host`) → отдельное значение пароля, `DATABASE_URL`;
+   - PEM-блок `-----BEGIN … PRIVATE KEY-----` → многострочный кандидат, `PRIVATE_KEY`;
+   - «голые» длинные токены в строках и комментариях.
+4. **Сразу после извлечения** считаются `value_fingerprint` (HMAC-SHA256, ключ из окружения) и `value_masked`; строка и контекст маскируются для будущего `Candidate`.
+5. **Дедупликация в пачке** по `(file_path, line_number, value_fingerprint)`.
+
+**Не делает:** не считает риск, не обращается к БД и LLM, не логирует сырые значения.
+
+**Тестовые сценарии:** несколько hunk'ов, переименование файла, `\ No newline at end of file`, CRLF, merge-коммит, многострочный PEM.
+
+---
+
+## 5. `static_analyzer/` — статический анализатор
+
+**Назначение.** По `RawCandidate` собирает независимые признаки (regex, энтропия, контекст), считает `ScoreBreakdown`, выставляет `DetectorFlags` и `Route`; возвращает `Candidate`.
+
+**Компоненты**
+
+| Компонент | Что делает |
+|---|---|
+| **Regex detector** | Каталог правил: AWS, GitHub, Slack, JWT, private key, Bearer, database URL, generic api_key/password. Правило: `name`, `pattern`, `secret_type`, `weight`. Предкомпилированы, защищены от ReDoS (ограничение длины входа и квантификаторов). Сработавшие имена попадают в `Candidate.regex_rules`, флаг `REGEX`. |
+| **Entropy calculator** | `H(X) = −Σ p(x)·log₂p(x)` по символам значения. Выполняется в `ThreadPoolExecutor(cpu_threads)` через `asyncio.to_thread`, чтобы не блокировать event loop. Порог зависит от алфавита (hex, base64, произвольный). Флаг `ENTROPY`. |
+| **Context analyzer** | Имя переменной (`password`, `secret`, `token`, `api_key`), путь файла (`.env`, `config/`, `*.pem` повышают; `test/`, `fixtures/`, `docs/`, `example` понижают), соседние строки. Выставляет `is_test_context`, флаг `CONTEXT`. |
+| **False-positive filters** | UUID, git-хеши, timestamps, placeholders (`changeme`, `xxxx`, `<your-key>`), публичные значения конфигурации. Снижают вес, но не удаляют кандидата молча. |
+| **Scorer** | `score_total = min(1.0, regex + entropy + context + token_type)`, веса из `ScoringConfig`. |
+| **Router** | `Route`: `≥ high` → `AI_VALIDATION`, `≥ low` → `SUSPICIOUS`, иначе `IGNORE`. |
+
+**Свойства.** Анализатор — детерминированная чистая функция от входа и конфигурации: это нужно для идемпотентности и воспроизводимых тестов. Сырое значение из `RawCandidate` не попадает в `Candidate`.
+
+**Пример весов по умолчанию:** regex `+0.5`, энтропия `+0.2`, имя secret/password `+0.2`, чувствительный контекст/тип токена `+0.1`.
+
+---
+
+## 6. `feed/` — лента задач
+
+**Назначение.** Durable-очередь `Task` поверх `storage/`. Единый способ выдавать работу worker'ам.
+
+**Интерфейс (протокол `Feed`)**
+- `enqueue(task) -> Task` — идемпотентно по `idempotency_key`; при конфликте возвращает существующую.
+- `claim(kinds, worker_id, lease_s) -> Task | None` — атомарно выбирает `QUEUED`-задачу с `not_before ≤ now` в порядке `priority, id`, переводит в `RUNNING`, ставит `lease_owner`, `lease_expires_at`.
+- `heartbeat(task_id)` — продление аренды у долгих задач.
+- `complete(task, result, side_effects)` / `fail(task, error)` — терминальные переходы; `complete` выполняется в одной транзакции с побочными записями (см. «Storage»).
+- `reap_expired()` — задачи с истёкшей арендой возвращаются в `QUEUED` с `ErrorCode.LEASE_EXPIRED`.
+- `cancel(run_id)` — переводит всё дерево запуска в `CANCELLED`; running-задачи проверяют признак между шагами.
+
+**Как работает**
+- `claim` — один атомарный `UPDATE … WHERE id = (SELECT … LIMIT 1) RETURNING *` в транзакции с немедленной блокировкой записи: два worker'а не получат одну задачу.
+- Повтор: `Task.schedule_retry` → `QUEUED`, `not_before = now + base · 2^(attempts − 1)`.
+- Ограничение «один активный запуск на репозиторий» обеспечивает частичный уникальный индекс.
+
+Протокол `Feed` — граница замены: реализацию можно поменять на другой брокер, не затрагивая остальные модули.
+
+---
+
+## 7. `orchestrator/` — запуск анализа
+
+**Назначение.** Превращает «запустить анализ репозитория» в дерево задач и отслеживает завершение.
+
+**Компоненты**
+- **Scan planner** — обрабатывает `REPOSITORY_SCAN`:
+  1. выбирает режим: нет `PROCESSED`-коммитов → `FULL`; иначе `INCREMENTAL`; `TARGETED` — из payload;
+  2. `git_collector.list_commits` → `INSERT … ON CONFLICT DO NOTHING` в `commits` (статус `PENDING`) в топологическом порядке — поэтому `Commit.id` возрастает от старых коммитов к новым;
+  3. выбирает коммиты запуска: `PENDING` и `FAILED`;
+  4. режет на пачки по `batch_size`, создаёт `COMMIT_ANALYSIS` (`payload.commit_ids`), кладёт в ленту;
+  5. переводит корень в `WAITING_CHILDREN`; если работы нет — сразу `SUCCEEDED` с пустым `ScanSummary`.
+- **Run finalizer** — периодически и по событию завершения задачи проверяет: все ли задачи с `root_task_id = run_id` терминальны (включая `AI_VALIDATION`). Если да — агрегирует `TaskResult` в `ScanSummary`, выставляет `Outcome` (`OK`/`PARTIAL`/`FAILED`), закрывает корень, обновляет `Repository.last_scan_at`.
+
+**Триггеры.** CLI/API (`MANUAL`), планировщик (`SCHEDULE`), webhook push (`WEBHOOK`) — все только создают `REPOSITORY_SCAN`.
+
+**Rebase/force-push.** Новые SHA попадут в анализ как новые; исчезнувшие остаются в `commits`, история найденных секретов сохраняется.
+
+---
+
+## 8. `workers/` — демоны
+
+### 8.1. Commit worker
+
+**Назначение.** Демон, обрабатывающий `COMMIT_ANALYSIS`.
+
+**Цикл демона**
+```
+loop:
+    task = feed.claim([COMMIT_ANALYSIS], worker_id, lease_s)
+    if task is None: sleep(poll_interval); continue
+    запустить фоновый heartbeat
+    выполнить пачку
+    успех  → feed.complete(task, result, side_effects)   # одна транзакция
+    ошибка → task.schedule_retry(error) либо fail
+graceful shutdown (SIGTERM): не брать новые, дождаться текущих (таймаут), остаток вернуть в QUEUED
+```
+
+**Внутренний pipeline одной задачи** (асинхронный, очереди ограничены — backpressure):
+
+```
+commit_ids → git_collector.get_diff → diff_queue(maxsize)
+          → preprocessor → raw_queue(maxsize)
+          → static_analyzer (энтропия в ThreadPool) → Candidate
+```
+
+Каждый коммит обрабатывается независимо: ошибка одного → он в `commit_ids_failed`, остальные продолжаются.
+
+**Фиксация результата — одна транзакция:**
+1. `Candidate` с `route ∈ {SUSPICIOUS, AI_VALIDATION}` → upsert в `candidates` по `UNIQUE(commit_id, file_path, line_number, value_fingerprint)`;
+2. для `route = AI_VALIDATION` при `ai_enabled` → `Task(AI_VALIDATION)` в ленту (идемпотентно по `candidate_id + prompt_version`);
+3. прямые инциденты по `trusted_formats` — через `incident_manager`;
+4. успешные коммиты → `PROCESSED` (+`processed_at`, `scan_run_id`, `last_task_id`), неуспешные → `FAILED` (+`error_code`);
+5. `TaskResult(CommitAnalysisOutput)`.
+
+Если транзакция упала — ничего не записано, задача перезапустится; дублей не будет благодаря `UNIQUE`-ограничениям.
+
+### 8.2. AI worker
+
+**Назначение.** Демон, обрабатывающий `AI_VALIDATION`. Цикл тот же, `kinds = [AI_VALIDATION]`; параллелизм — `Semaphore(llm_workers)` (по умолчанию 5), контроль стоимости и latency. Приоритет задач выше `COMMIT_ANALYSIS`, чтобы инциденты появлялись раньше. Логика вызова — в модуле `ai_validation/`.
+
+**Конфиг:** concurrency, размеры очередей, `lease_s`, `poll_interval`, таймаут graceful shutdown.
+
+---
+
+## 9. `ai_validation/` — модуль ИИ-валидации
+
+**Назначение.** Обрабатывает операцию `AI_VALIDATION`, появляющуюся в ленте, когда у `Candidate` `route = AI_VALIDATION`: даёт финальный вердикт по одному кандидату.
+
+**Пошагово**
+1. Загрузить `Candidate` по `payload.candidate_id` (в БД только маскированные значения).
+2. **Masking guard** — проверить, что prompt не содержит сырых значений; при подозрении → `FAILED(MASKING_VIOLATION)`, в LLM не уходит.
+3. Собрать prompt. System: роль security-классификатора, определение секрета, явный список типичных false positive (UUID, hash, timestamps, тестовые данные, placeholders, публичная конфигурация, обычные случайные строки), требование строго структурированного JSON. User (динамически): repository, commit, file, line, masked code, context, token, entropy, regex matches.
+4. Вызвать `LlmClient` (интерфейс; в тестах — фейк) под `Semaphore` и с таймаутом.
+5. **Разобрать и провалидировать** JSON → `AiVerdict` (типы, `confidence ∈ [0,1]`, enum). Невалидный ответ → `LLM_INVALID_RESPONSE` (retry), а не «не секрет».
+6. В одной транзакции: `AiVerdict` + вызов `incident_manager` + `TaskResult(AiValidationOutput)`.
+
+**Ошибки и ретраи.** Сеть, 429, 5xx, таймаут, невалидный JSON → `retryable`; backoff 1→2→4→8 с до `max_attempts = 5`; затем `FAILED(LLM_FAILED)`: кандидат остаётся без вердикта, запуск получает `PARTIAL`, остальное не затронуто. Новый `prompt_version` даёт новый `idempotency_key`, поэтому переанализ возможен вручную.
+
+**Приватность.** `ai.enabled = false` полностью отключает отправку: AI-задачи не создаются, инциденты возможны только по `trusted_formats`. Модель и версия prompt'а сохраняются в `AiVerdict` для аудита.
+
+---
+
+## 10. `incident_manager/` — инциденты
+
+**Назначение.** Единственное место, где решается «это инцидент». Превращает `(Candidate, AiVerdict | None)` в создание или обновление `Incident`.
+
+**Как работает**
+1. `decide(candidate, verdict, policy)` — правила из `models.md` (§3.9): вердикт ИИ финальный (`is_secret ∧ confidence ≥ min_ai_confidence`); без вердикта — только `trusted_formats ∧ score_total ≥ min_local_score ∧ ¬is_test_context`.
+2. Поиск существующего инцидента по `(repository_id, fingerprint)`.
+3. Новый → создать `Incident(OPEN)`, `Occurrence`, `IncidentEvent(OPENED)`. Существующий → добавить `Occurrence`, поднять `severity`/`confidence`, при закрытом статусе — reopen (`REOPENED`).
+4. `still_in_head`: через `git_collector.file_contains_in_head`; при `True` и `bump_if_in_head` — повысить severity (`SEVERITY_RAISED`).
+5. Для `severity ≥ HIGH` — создать `OutboxMessage` (в той же транзакции). Отправку выполняет отдельный компонент доставки: после успешной отправки `status = SENT`, событие `NOTIFIED`.
+
+**Что входит в рекомендацию по умолчанию.** Ротация/отзыв ключа у провайдера, затем удаление из истории (`git filter-repo`/BFG); удаление из последнего коммита ключ не отзывает.
+
+---
+
+## 11. `storage/` — хранилище
+
+**Назначение.** Единственный слой с SQL: схема, миграции, транзакции. Бизнес-логики нет.
+
+**Таблицы:** `repositories`, `commits`, `commit_parents`, `tasks`, `task_results`, `candidates`, `ai_verdicts`, `incidents`, `occurrences`, `incident_events`, `outbox_messages`. Поля, типы, ключи и индексы — в `models.md` (§3, §6).
+
+**Требования**
+- Все PK — `INTEGER PRIMARY KEY`; SHA и fingerprint — BLOB с `UNIQUE`-индексами; enum — SMALLINT; время — epoch в миллисекундах.
+- Режим журнала с конкурентным чтением (WAL); для `claim` и фиксации результатов — транзакции с немедленной блокировкой записи.
+- Версионирование схемы (миграции).
+- Составные транзакционные операции (единица атомарности):
+  - `commit_analysis_done(task, candidates, ai_tasks, commit_updates, direct_incidents, result)`;
+  - `ai_validation_done(task, verdict, incident_changes, outbox, result)`;
+  - `run_finalized(root_task, summary, repository_update)`.
+- Сырые значения секретов в БД не хранятся; ключ HMAC живёт вне БД.
+
+Выбор драйвера SQLite и способа доступа из `asyncio` пока не сделан — см. `AGENTS.md`.
+
+---
+
+## 12. `observability/` — логи и метрики
+
+**Логи.** Структурные (JSON), с полями `task_id`, `run_id`, `commit_id`, `candidate_id`. **Никогда** — сырые значения и немаскированный `source_line`.
+
+**Метрики**
+- длина ленты по `kind`/`status`, возраст самой старой `QUEUED`-задачи, число протухших аренд;
+- throughput: коммиты/с, строки/с;
+- доля кандидатов по `route`, доля отправленных в LLM;
+- латентность и ошибки LLM, число повторов;
+- открытые инциденты по `severity`/`status`.
+
+---
+
+## Сквозные сценарии
+
+**Первый запуск.** `REPOSITORY_SCAN(FULL)` → planner вставляет все SHA как `PENDING` → N×`COMMIT_ANALYSIS` → кандидаты → M×`AI_VALIDATION` → инциденты → `ScanSummary`.
+
+**Повторный запуск.** `INCREMENTAL`: выбираются `PENDING`/`FAILED`-коммиты, `PROCESSED` пропускаются; повторная постановка той же пачки отсекается `idempotency_key`, повторный кандидат — `UNIQUE` на `candidates`.
+
+**Высокая вероятность утечки.** Кандидат `DATABASE_PASSWORD = "…"`, `score_total = 0.8` → `AI_VALIDATION` → `AiVerdict(is_secret=true, confidence=0.96, severity=HIGH)` → `Incident(OPEN)`; секрет всё ещё в HEAD → `CRITICAL`; `OutboxMessage` → уведомление; тот же секрет в другом коммите → новый `Occurrence` в том же инциденте.
+
+**Падение worker'а.** Аренда истекла → `reap_expired` → задача `QUEUED` → перезапуск; транзакционная фиксация исключает частичные результаты.
+
+**LLM недоступен.** `AI_VALIDATION` уходит в retry, затем `FAILED`; запуск завершается `PARTIAL`; инциденты по `trusted_formats` открываются локально.
