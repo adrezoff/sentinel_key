@@ -53,7 +53,7 @@ sentinel_key/
     modules.md         # модули и компоненты
     decisions/         # ADR: выбор библиотек и инструментов
   src/                 # исходники
-    models/            # один файл — одна модель (класс)
+    models/            # один файл — одна модель; подпакеты repository/task/candidate/incident
     config/            # конфигурационные модели, загрузка конфигурации
     git_collector/     # история и diff из Git
     preprocessor/      # diff → RawCandidate
