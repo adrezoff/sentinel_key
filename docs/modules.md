@@ -6,7 +6,12 @@
 
 ```
 sentinel_key/src/
-  models/            # классы моделей (по одному файлу на модель)
+  models/            # доменные классы (один файл — одна модель)
+    common/          # clock, JSON codec
+    repository/      # Repository, Commit, CommitParent
+    task/            # Task, TaskResult, scan/commit payloads
+    candidate/       # RawCandidate, Candidate, ScoreBreakdown
+    incident/        # Incident, Occurrence, IncidentEvent, OutboxMessage
   config/            # конфигурационные модели и загрузка конфигурации
   git_collector/     # получение истории и diff из Git
   preprocessor/      # diff → добавленные строки → RawCandidate
@@ -40,11 +45,12 @@ flowchart LR
 
 ## 1. `models/`
 
-**Назначение.** Доменные классы: `Repository`, `Commit`, `CommitParent`, `Task`, `TaskResult`, `RawCandidate`, `Candidate`, `AiVerdict`, `Incident`, `Occurrence`, `IncidentEvent`, `OutboxMessage` и общие `SecretType`, `Severity`, `DetectorFlags`.
+**Назначение.** Доменные классы, сгруппированные по функциональности: `repository`, `task`, `candidate`, `incident` (+ `common` для утилит). Общие enum — `SecretType`, `Severity`, `DetectorFlags` в `models/enums.py`. Публичный импорт — через `models` (пакет реэкспортирует классы).
 
 **Как устроен.**
-- Один файл — одна модель; enum, принадлежащий только этой модели, лежит в её файле, общие — в `models/enums.py`.
-- В моделях живёт только **поведение, зависящее от самой модели**: проверка переходов (`Task.transition`, `Incident.set_status`), расчёт `ScoreBreakdown.total`, `Task.schedule_retry`, валидация `AiVerdict`. Ни SQL, ни сети, ни чтения конфигурации.
+- Один файл — одна модель внутри подпакета; enum, принадлежащий только этой модели, лежит в её файле.
+- В моделях живёт только **поведение, зависящее от самой модели**: проверка переходов (`Task.transition`, `Incident.set_status`), расчёт `ScoreBreakdown.total`, `Task.schedule_retry`. Ни SQL, ни сети, ни чтения конфигурации.
+- `TaskKind.AI_VALIDATION` зарезервирован (значение 3). Классы `AiVerdict`, `AiValidationPayload`, `AiValidationOutput` и регистрация kind — зона ответственности трека `ai_validation` (пока отсутствуют).
 - Любое изменение полей начинается с `docs/models.md`.
 
 ---
