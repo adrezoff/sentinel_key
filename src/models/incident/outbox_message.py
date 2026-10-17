@@ -1,4 +1,4 @@
-"""``OutboxMessage`` — notification outbox (table ``outbox_messages``)."""
+"""``OutboxMessage`` — outbox уведомлений (таблица ``outbox_messages``)."""
 
 from __future__ import annotations
 
@@ -11,12 +11,16 @@ from ..common.clock import utc_now
 
 
 class NotifyChannel(IntEnum):
+    """Канал доставки уведомления об инциденте."""
+
     WEBHOOK = 1
     SLACK = 2
     EMAIL = 3
 
 
 class OutboxStatus(IntEnum):
+    """Статус доставки сообщения outbox."""
+
     PENDING = 1
     SENT = 2
     FAILED = 3
@@ -24,6 +28,8 @@ class OutboxStatus(IntEnum):
 
 @dataclass(slots=True)
 class OutboxMessage:
+    """Сообщение на отправку: пишется в той же транзакции, что и изменение инцидента."""
+
     incident_id: int
     channel: NotifyChannel
     payload: dict[str, Any]

@@ -1,4 +1,4 @@
-"""``RawCandidate`` — in-memory only. The sole class allowed to hold a raw secret."""
+"""``RawCandidate`` — только в памяти. Единственный класс, которому разрешено держать сырой секрет."""
 
 from __future__ import annotations
 
@@ -20,6 +20,12 @@ def _refuse_serialization(*_args: Any, **_kwargs: Any) -> NoReturn:
 
 @dataclass(slots=True)
 class RawCandidate:
+    """Кандидат до маскирования и scoring: живёт только в процессе.
+
+    ``raw_value`` / ``source_line_raw`` / ``context_raw`` не пишутся в БД, логи и ``repr``.
+    Сериализация и копирование запрещены.
+    """
+
     repository_id: int
     commit_id: int
     file_path: str
@@ -61,6 +67,7 @@ class RawCandidate:
         secret_type: SecretType | None = None,
         created_at: datetime | None = None,
     ) -> Candidate:
+        """Собрать сохраняемый ``Candidate`` без копирования сырых полей."""
         return Candidate(
             repository_id=self.repository_id,
             commit_id=self.commit_id,

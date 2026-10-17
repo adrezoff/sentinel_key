@@ -1,7 +1,7 @@
-"""JSON-ready conversion for value objects (payload, output, metrics).
+"""Преобразование value object (payload, output, metrics) в JSON-совместимые структуры.
 
-Storage serializes these dicts; models do not execute SQL.
-New payload/output dataclasses are picked up automatically from field types.
+Storage сериализует эти dict; модели SQL не выполняют.
+Новые dataclass payload/output подхватываются автоматически по типам полей.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ T = TypeVar("T")
 
 
 def to_jsonable(value: Any) -> Any:
+    """Рекурсивно привести значение к типам, пригодным для JSON (enum → int, bytes → hex)."""
     if is_dataclass(value):
         return {f.name: to_jsonable(getattr(value, f.name)) for f in fields(value)}
     if isinstance(value, Enum):
@@ -29,6 +30,7 @@ def to_jsonable(value: Any) -> Any:
 
 
 def from_jsonable(cls: type[T], data: Any) -> T:
+    """Восстановить объект типа ``cls`` из JSON-совместимой структуры."""
     return _coerce(data, cls)  # type: ignore[return-value]
 
 

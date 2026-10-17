@@ -1,4 +1,4 @@
-"""``Candidate`` — persisted potential secret (table ``candidates``)."""
+"""``Candidate`` — сохраняемый потенциальный секрет (таблица ``candidates``)."""
 
 from __future__ import annotations
 
@@ -12,6 +12,8 @@ from .score_breakdown import ScoreBreakdown
 
 
 class Route(IntEnum):
+    """Маршрут после scoring: отбросить, отметить как подозрительный или отправить в LLM."""
+
     IGNORE = 0
     SUSPICIOUS = 1
     AI_VALIDATION = 2
@@ -22,6 +24,12 @@ _FINGERPRINT_SIZE = 32
 
 @dataclass(slots=True)
 class Candidate:
+    """Потенциальный секрет после статического анализа.
+
+    Сырого значения нет: только ``value_masked`` и ``value_fingerprint`` (HMAC-SHA256).
+    Уникальность: ``(commit_id, file_path, line_number, value_fingerprint)``.
+    """
+
     repository_id: int
     commit_id: int
     file_path: str
@@ -54,6 +62,7 @@ class Candidate:
 
     @property
     def score(self) -> ScoreBreakdown:
+        """Составляющие скора как value object (без повторного суммирования)."""
         return ScoreBreakdown(
             regex=self.score_regex,
             entropy=self.score_entropy,

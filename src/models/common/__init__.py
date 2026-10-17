@@ -1,4 +1,4 @@
-"""Shared helpers used by several model packages (not domain entities)."""
+"""Общие хелперы нескольких пакетов моделей (не доменные сущности)."""
 
 from .clock import utc_now
 from .codec import from_jsonable, to_jsonable

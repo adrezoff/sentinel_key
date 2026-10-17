@@ -1,15 +1,15 @@
-"""Domain models. Fields and tables: ``docs/models.md``.
+"""Доменные модели. Поля и таблицы: ``docs/models.md``.
 
-Layout by concern (one class — one file inside each package):
+Разбиение по зонам ответственности (один класс — один файл внутри пакета):
 
-* ``common`` — clock / JSON codec helpers
+* ``common`` — часы / JSON-codec
 * ``repository`` — Repository, Commit, CommitParent
-* ``task`` — Task feed, payloads, results
+* ``task`` — лента задач, payload, результаты
 * ``candidate`` — RawCandidate, Candidate, scoring VO
-* ``incident`` — Incident, Occurrence, events, outbox
+* ``incident`` — Incident, Occurrence, события, outbox
 
-AI models (``AiVerdict``, AI_VALIDATION payload/output) are owned by the
-ai_validation track and are not present in this package yet.
+AI-модели (``AiVerdict``, payload/output ``AI_VALIDATION``) принадлежат треку
+ai_validation и в этом пакете пока отсутствуют.
 """
 
 from .candidate import Candidate, RawCandidate, Route, ScoreBreakdown

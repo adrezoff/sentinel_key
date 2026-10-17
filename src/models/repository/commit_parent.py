@@ -1,4 +1,4 @@
-"""``CommitParent`` — git parent edges (table ``commit_parents``)."""
+"""``CommitParent`` — рёбра родитель→коммит (таблица ``commit_parents``)."""
 
 from dataclasses import dataclass
 
@@ -7,6 +7,11 @@ _SHA_LENGTHS = frozenset({20, 32})
 
 @dataclass(slots=True)
 class CommitParent:
+    """Родитель коммита в графе Git (merge, ветки).
+
+    ``position = 0`` — first parent. ``parent_sha`` может отсутствовать в ``commits`` (shallow).
+    """
+
     commit_id: int
     position: int
     parent_sha: bytes

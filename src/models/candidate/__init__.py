@@ -1,4 +1,4 @@
-"""Static-analysis candidate models (in-memory raw + persisted)."""
+"""Модели кандидатов статического анализа (сырой в памяти + сохраняемый)."""
 
 from .candidate import Candidate, Route
 from .raw_candidate import RawCandidate

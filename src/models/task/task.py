@@ -1,4 +1,4 @@
-"""``Task`` — unit of work in the feed (table ``tasks``)."""
+"""``Task`` — единица работы в ленте (таблица ``tasks``)."""
 
 from __future__ import annotations
 
@@ -37,6 +37,12 @@ def _hash_bytes(data: bytes) -> str:
 
 @dataclass(slots=True)
 class Task:
+    """Задача ленты: claim/lease/retry, статус только через ``transition``.
+
+    Запуск анализа = корневая ``REPOSITORY_SCAN``. ``idempotency_key`` защищает от дублей.
+    ``run_id = root_task_id or id`` — идентификатор запуска для дочерних задач.
+    """
+
     kind: TaskKind
     repository_id: int
     payload: TaskPayload
@@ -71,18 +77,22 @@ class Task:
 
     @property
     def spec(self) -> TaskKindSpec:
+        """Спецификация вида задачи из реестра."""
         return spec_for(self.kind)
 
     @property
     def is_terminal(self) -> bool:
+        """``True``, если задача в терминальном статусе."""
         return self.status in TERMINAL_STATUSES
 
     @property
     def run_id(self) -> int | None:
+        """Id запуска: у корня — свой ``id``, у дочерних — ``root_task_id``."""
         return self.root_task_id or self.id
 
     @property
     def error(self) -> TaskError | None:
+        """Последняя ошибка как value object, либо ``None``."""
         if self.error_code is None:
             return None
         return TaskError(
@@ -92,11 +102,13 @@ class Task:
         )
 
     def apply_error(self, error: TaskError) -> None:
+        """Записать поля ошибки (без смены статуса)."""
         self.error_code = error.code
         self.error_message = error.message
         self.error_retryable = error.retryable
 
     def transition(self, new_status: TaskStatus, now: datetime) -> None:
+        """Сменить статус по автомату; при ``RUNNING`` увеличить ``attempts``."""
         allowed = TRANSITIONS.get(self.status, frozenset())
         if new_status not in allowed:
             raise InvalidTransition(self.status, new_status, entity="Task")
@@ -120,6 +132,7 @@ class Task:
         *,
         base: timedelta = DEFAULT_RETRY_BASE,
     ) -> None:
+        """Вернуть в ``QUEUED`` с backoff либо перевести в ``FAILED``, если попытки исчерпаны."""
         when = now if now is not None else utc_now()
         self.apply_error(error)
         max_attempts = self.max_attempts if self.max_attempts is not None else 3
@@ -146,6 +159,7 @@ class Task:
         nonce: bytes,
         **kwargs: object,
     ) -> Task:
+        """Фабрика корневой задачи ``REPOSITORY_SCAN`` с корректным ``idempotency_key``."""
         return cls(
             kind=TaskKind.REPOSITORY_SCAN,
             repository_id=repository_id,
@@ -162,6 +176,7 @@ class Task:
         payload: CommitAnalysisPayload,
         **kwargs: object,
     ) -> Task:
+        """Фабрика ``COMMIT_ANALYSIS`` с ключом по отсортированным ``commit_ids``."""
         return cls(
             kind=TaskKind.COMMIT_ANALYSIS,
             repository_id=repository_id,

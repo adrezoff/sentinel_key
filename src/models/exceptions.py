@@ -1,8 +1,8 @@
-"""Model-level errors (no SQL, no I/O)."""
+"""Ошибки уровня моделей (без SQL и I/O)."""
 
 
 class InvalidTransition(ValueError):
-    """Raised when a status change is not allowed by the model's automaton."""
+    """Переход статуса запрещён автоматом модели (``Task``, ``Incident`` и т.п.)."""
 
     def __init__(self, current: object, new: object, *, entity: str) -> None:
         self.current = current

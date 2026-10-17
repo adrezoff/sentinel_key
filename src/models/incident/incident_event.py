@@ -1,4 +1,4 @@
-"""``IncidentEvent`` — append-only incident journal (table ``incident_events``)."""
+"""``IncidentEvent`` — append-only журнал инцидента (таблица ``incident_events``)."""
 
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -8,6 +8,8 @@ from ..common.clock import utc_now
 
 
 class IncidentEventKind(IntEnum):
+    """Вид события жизненного цикла инцидента."""
+
     OPENED = 1
     OCCURRENCE_ADDED = 2
     SEVERITY_RAISED = 3
@@ -18,6 +20,8 @@ class IncidentEventKind(IntEnum):
 
 @dataclass(slots=True)
 class IncidentEvent:
+    """Запись журнала: кто/когда/что изменил. Не редактируется после создания."""
+
     incident_id: int
     kind: IncidentEventKind
     id: int | None = None
