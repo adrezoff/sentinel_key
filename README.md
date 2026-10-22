@@ -66,9 +66,8 @@ if task is not None:
 существовать. `enqueue` возвращает существующую задачу при повторном
 `idempotency_key`. Побочные записи можно передать в `complete` синхронным
 callback'ом `side_effects(session)` — статус задачи, результат и эти записи
-будут сохранены одной транзакцией. Для будущих демонов в `workers` подготовлены
-`TaskHandler` и `WorkerSettings`; сам цикл и обработчики появятся вместе с
-`orchestrator` и анализаторами.
+будут сохранены одной транзакцией. Для `COMMIT_ANALYSIS` реализован
+`CommitWorker`; пример запуска приведён ниже.
 
 ## Предобработка diff
 
@@ -171,6 +170,52 @@ incident = await storage.run_in_transaction(persist)
 `still_in_head` принимает `True`, `False` или `None` (проверка не выполнялась).
 Ветка AI-вердиктов и outbox будут подключены вместе с соответствующими
 модулями.
+
+## Воркер анализа коммитов
+
+`CommitWorker` берёт `COMMIT_ANALYSIS` из ленты, последовательно загружает diff
+по SHA, извлекает и оценивает кандидатов, применяет локальную политику
+инцидентов. Heartbeat продлевает аренду, а сигнал остановки позволяет
+завершить текущую задачу. До запуска должны быть сохранены `Repository`,
+`Commit` и задача с `CommitAnalysisPayload(commit_ids=[...])`.
+
+```python
+import asyncio
+import base64
+import os
+
+from feed import SqliteFeed
+from git_collector import LocalGitCollector
+from incident_manager import IncidentManager
+from models import TaskKind
+from preprocessor import Preprocessor
+from static_analyzer import StaticAnalyzer
+from storage import SqliteStorage
+from workers import CommitWorker, WorkerSettings
+
+async def main() -> None:
+    key = base64.b64decode(os.environ["SENTINEL_KEY_HMAC_KEY_B64"], validate=True)
+    async with SqliteStorage("var/sentinel_key.db") as storage:
+        worker = CommitWorker(
+            feed=SqliteFeed(storage),
+            storage=storage,
+            collector_for=LocalGitCollector,
+            preprocessor=Preprocessor(key),
+            analyzer=StaticAnalyzer(),
+            incident_manager=IncidentManager(),
+            settings=WorkerSettings("commit-worker-1", (TaskKind.COMMIT_ANALYSIS,)),
+        )
+        await worker.run_once()  # False означает пустую ленту.
+        # Для непрерывной работы: await worker.run(stop_event), где stop_event — asyncio.Event.
+
+asyncio.run(main())
+```
+
+В MVP AI-обработка отключена: без `AiTaskFactory` высокий балл сохраняется как
+`SUSPICIOUS`, даже если у корневой задачи `ai_enabled=True`. В будущем адаптер
+получит только сохранённый `Candidate` с `id` и создаст версионированную задачу
+`AI_VALIDATION` в той же транзакции. Подключайте его после реализации моделей
+AI и регистрации этого вида задачи. Отдельной CLI-команды воркера пока нет.
 
 ## Как вести разработку
 

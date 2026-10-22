@@ -1,22 +1,5 @@
 ﻿Я бы двигался так:
 
-
-4. **Commit worker**
-
-   К этому моменту уже будет готов полезный pipeline:
-
-   `COMMIT_ANALYSIS → Git diff → preprocessor → static analyzer → candidates → local incidents`
-
-   Первый worker стоит сделать максимально простым:
-
-   - последовательная обработка коммитов;
-   - ограниченные очереди или даже последовательный pipeline;
-   - heartbeat;
-   - независимая фиксация успеха/ошибки каждого коммита;
-   - единая итоговая транзакция через существующие storage/feed.
-
-   Параллелизм и тонкую настройку backpressure лучше добавить после работающего end-to-end сценария.
-
 5. **Orchestrator**
 
    После рабочего commit worker:
