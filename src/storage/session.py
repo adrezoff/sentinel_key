@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Collection
 from datetime import datetime, timezone
 from typing import Any
 
@@ -285,6 +286,60 @@ class StorageSession:
             "SELECT * FROM tasks WHERE id = ?", (task_id,)
         ).fetchone()
         return None if row is None else self._task_from_row(row)
+
+    def find_next_queued_task(
+        self,
+        kinds: Collection[TaskKind],
+        now: datetime,
+    ) -> Task | None:
+        """Найти следующую готовую задачу внутри транзакции claim."""
+        kind_values = tuple(int(kind) for kind in kinds)
+        if not kind_values:
+            return None
+        placeholders = ",".join("?" for _ in kind_values)
+        row = self._connection.execute(
+            f"""
+            SELECT * FROM tasks
+            WHERE status = ?
+              AND kind IN ({placeholders})
+              AND (not_before IS NULL OR not_before <= ?)
+            ORDER BY priority, id
+            LIMIT 1
+            """,
+            (int(TaskStatus.QUEUED), *kind_values, _to_epoch_ms(now)),
+        ).fetchone()
+        return None if row is None else self._task_from_row(row)
+
+    def list_expired_tasks(self, now: datetime) -> list[Task]:
+        """Загрузить RUNNING-задачи с истёкшей арендой в порядке id."""
+        rows = self._connection.execute(
+            """
+            SELECT * FROM tasks
+            WHERE status = ? AND lease_expires_at <= ?
+            ORDER BY id
+            """,
+            (int(TaskStatus.RUNNING), _to_epoch_ms(now)),
+        ).fetchall()
+        return [self._task_from_row(row) for row in rows]
+
+    def list_active_run_tasks(self, run_id: int) -> list[Task]:
+        """Загрузить нетерминальные корневую и дочерние задачи запуска."""
+        rows = self._connection.execute(
+            """
+            SELECT * FROM tasks
+            WHERE (id = ? OR root_task_id = ?)
+              AND status IN (?, ?, ?)
+            ORDER BY id
+            """,
+            (
+                run_id,
+                run_id,
+                int(TaskStatus.QUEUED),
+                int(TaskStatus.RUNNING),
+                int(TaskStatus.WAITING_CHILDREN),
+            ),
+        ).fetchall()
+        return [self._task_from_row(row) for row in rows]
 
     def save_task_result(self, result: TaskResult) -> None:
         """Сохранить единственный результат задачи с типизированным output в JSON."""
