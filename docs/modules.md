@@ -272,7 +272,20 @@ commit_ids → git_collector.get_diff → diff_queue(maxsize)
   - `run_finalized(root_task, summary, repository_update)`.
 - Сырые значения секретов в БД не хранятся; ключ HMAC живёт вне БД.
 
-Выбор драйвера SQLite и способа доступа из `asyncio` пока не сделан — см. `AGENTS.md`.
+**Реализация.** Используется `sqlite3` из стандартной библиотеки. Один экземпляр
+`SqliteStorage` владеет одним соединением, а операции выполняются через
+`asyncio.to_thread` и сериализуются `asyncio.Lock`, поэтому синхронный драйвер не
+блокирует event loop. Составные записи выполняются через `run_in_transaction(...)`
+и `StorageSession`; callback целиком работает в одном worker thread внутри
+`BEGIN IMMEDIATE`. Решение и ограничения зафиксированы в
+[`decisions/0001-sqlite-access.md`](decisions/0001-sqlite-access.md).
+
+Схема создаётся версионируемыми SQL-миграциями из `storage/migrations/`.
+`SqliteStorage.initialize()` применяет ещё не выполненные миграции, включает
+`foreign_keys`, `busy_timeout` и WAL для файловой БД. Слой предоставляет
+преобразование всех уже реализованных сохраняемых моделей; таблица
+`ai_verdicts` создаётся миграцией, а типизированный mapper будет добавлен вместе
+с доменной моделью `AiVerdict` в треке `ai_validation`.
 
 ---
 
