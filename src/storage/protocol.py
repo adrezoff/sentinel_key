@@ -22,3 +22,7 @@ class Storage(Protocol):
     async def run_in_transaction(self, operation: Callable[[Any], T]) -> T:
         """Выполнить синхронный callback атомарно с немедленной блокировкой записи."""
         ...
+
+    async def read(self, operation: Callable[[Any], T]) -> T:
+        """Выполнить короткую операцию чтения без блокировки записи."""
+        ...

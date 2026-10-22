@@ -157,6 +157,15 @@ flowchart LR
 
 Протокол `Feed` — граница замены: реализацию можно поменять на другой брокер, не затрагивая остальные модули.
 
+**Реализация.** `SqliteFeed` использует `Storage.run_in_transaction(...)` и
+операции `StorageSession`: выбор и смена состояния задачи происходят внутри
+одного `BEGIN IMMEDIATE`. Время передаётся через UTC-clock, что позволяет
+детерминированно проверять lease, heartbeat и backoff. `complete` принимает
+опциональный синхронный callback для побочных записей и сохраняет его изменения
+вместе со статусом задачи и `TaskResult`. `fail` применяет
+`Task.schedule_retry`; для окончательного `FAILED` создаётся `TaskResult` с
+`Outcome.FAILED`.
+
 ---
 
 ## 7. `orchestrator/` — запуск анализа
@@ -220,6 +229,11 @@ commit_ids → git_collector.get_diff → diff_queue(maxsize)
 **Назначение.** Демон, обрабатывающий `AI_VALIDATION`. Цикл тот же, `kinds = [AI_VALIDATION]`; параллелизм — `Semaphore(llm_workers)` (по умолчанию 5), контроль стоимости и latency. Приоритет задач выше `COMMIT_ANALYSIS`, чтобы инциденты появлялись раньше. Логика вызова — в модуле `ai_validation/`.
 
 **Конфиг:** concurrency, размеры очередей, `lease_s`, `poll_interval`, таймаут graceful shutdown.
+
+**Статус реализации.** Пока определены только общий протокол обработчика
+`TaskHandler` и неизменяемые `WorkerSettings` для claim/poll. Цикл демона,
+heartbeat-задача и graceful shutdown будут добавлены вместе с конкретным
+commit worker; предметная логика в этот каркас не включена.
 
 ---
 

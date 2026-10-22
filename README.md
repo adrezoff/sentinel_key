@@ -33,6 +33,43 @@ finally:
     await storage.close()
 ```
 
+## Лента задач
+
+`SqliteFeed` использует то же хранилище и реализует durable-очередь из
+`docs/modules.md`: идемпотентную постановку, атомарный `claim`, lease/heartbeat,
+retry с backoff, перевыдачу протухших задач и отмену дерева запуска.
+
+```python
+from feed import SqliteFeed
+from models import ScanTaskPayload, Task, TaskKind, TaskResult, Outcome
+from storage import SqliteStorage
+
+storage = SqliteStorage("var/sentinel_key.db")
+await storage.initialize()
+feed = SqliteFeed(storage, heartbeat_lease_s=30)
+
+queued = await feed.enqueue(
+    Task.repository_scan(
+        repository_id=repository_id,
+        payload=ScanTaskPayload(),
+        nonce=run_nonce,
+    )
+)
+task = await feed.claim([TaskKind.REPOSITORY_SCAN], "scan-worker-1", lease_s=30)
+if task is not None:
+    # Для долгой операции worker периодически вызывает heartbeat(task.id).
+    result = TaskResult(task_id=task.id, outcome=Outcome.OK)
+    await feed.complete(task, result)
+```
+
+Перед постановкой задачи репозиторий с указанным `repository_id` должен уже
+существовать. `enqueue` возвращает существующую задачу при повторном
+`idempotency_key`. Побочные записи можно передать в `complete` синхронным
+callback'ом `side_effects(session)` — статус задачи, результат и эти записи
+будут сохранены одной транзакцией. Для будущих демонов в `workers` подготовлены
+`TaskHandler` и `WorkerSettings`; сам цикл и обработчики появятся вместе с
+`orchestrator` и анализаторами.
+
 
 
 ## Как вести разработку
