@@ -280,6 +280,16 @@ commit worker; предметная логика в этот каркас не �
 
 **Назначение.** Единственное место, где решается «это инцидент». Превращает `(Candidate, AiVerdict | None)` в создание или обновление `Incident`.
 
+**Локальная реализация MVP.** `IncidentManager.process(session, candidate,
+still_in_head=None)` выполняется синхронно внутри `Storage.run_in_transaction`.
+Кандидат к этому моменту уже сохранён и имеет `id`; это позволяет commit worker
+включить создание инцидента в общую транзакцию с остальными эффектами задачи.
+Метод принимает результат проверки HEAD от вызывающего кода, не обращаясь к Git.
+Повтор того же `candidate.id` не создаёт обнаружение или событие и не меняет
+версию инцидента. Для нового обнаружения запись `Incident`, `Occurrence` и
+`IncidentEvent` атомарна. В этой ветке вердикт не передаётся; AI-ветка и outbox
+остаются отдельным этапом.
+
 **Как работает**
 1. `decide(candidate, verdict, policy)` — правила из `models.md` (§3.9): вердикт ИИ финальный (`is_secret ∧ confidence ≥ min_ai_confidence`); без вердикта — только `trusted_formats ∧ score_total ≥ min_local_score ∧ ¬is_test_context`.
 2. Поиск существующего инцидента по `(repository_id, fingerprint)`.

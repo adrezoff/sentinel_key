@@ -1,32 +1,6 @@
 ﻿Я бы двигался так:
 
 
-2. **Static analyzer**
-
-   После preprocessor можно реализовать полностью автономный локальный pipeline:
-
-   - небольшой каталог надёжных regex;
-   - энтропию;
-   - анализ имени переменной и пути файла;
-   - фильтры UUID, hash, placeholder и тестового контекста;
-   - расчёт `ScoreBreakdown`;
-   - выбор `IGNORE` или `SUSPICIOUS`.
-
-   Для MVP я бы временно не создавал маршрут `AI_VALIDATION`, когда AI отключён: кандидат с высоким score сохраняется как `SUSPICIOUS`, а инцидент создаётся только для `trusted_formats` согласно уже описанной политике.
-
-3. **Incident manager — только локальная ветка**
-
-   Не обязательно реализовывать AI-часть. Достаточно:
-
-   - `IncidentPolicy.should_open(candidate, verdict=None)`;
-   - дедупликации по `(repository_id, fingerprint)`;
-   - создания `Occurrence`;
-   - reopen закрытого инцидента;
-   - повышения severity;
-   - записи `IncidentEvent`.
-
-   Outbox и реальные уведомления можно оставить на потом.
-
 4. **Commit worker**
 
    К этому моменту уже будет готов полезный pipeline:

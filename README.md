@@ -142,6 +142,36 @@ commit worker, а решение об инциденте — к `incident_manage
 вызов выносит расчёты из event loop. Для локальной проверки доступен
 синхронный `analyze(...)`. Анализатор не сохраняет данные и не вызывает сеть.
 
+## Локальные инциденты
+
+`IncidentManager` открывает инцидент только по правилам `IncidentPolicy`:
+доверенный формат, достаточный `score_total` и отсутствие тестового контекста.
+Для одного fingerprint в репозитории создаётся один `Incident`; каждый новый
+кандидат добавляет `Occurrence`. Повтор того же кандидата не меняет граф.
+Закрытый инцидент вновь открывается при новом обнаружении, а подтверждённое
+наличие в HEAD повышает severity. В модуле нет вызовов Git или LLM.
+
+Вызов выполняется в транзакции вместе с записью кандидата и результатом
+задачи. `candidate` должен уже получить `id` в этой же транзакции:
+
+```python
+from incident_manager import IncidentManager
+
+manager = IncidentManager()
+
+def persist(session):
+    saved = session.save_candidate(candidate)
+    incident = manager.process(session, saved, still_in_head=None)
+    # Здесь же сохраните статус коммита и TaskResult.
+    return incident
+
+incident = await storage.run_in_transaction(persist)
+```
+
+`still_in_head` принимает `True`, `False` или `None` (проверка не выполнялась).
+Ветка AI-вердиктов и outbox будут подключены вместе с соответствующими
+модулями.
+
 ## Как вести разработку
 
 `master` — релиз ветка, любой merge в неё считается релизом.
