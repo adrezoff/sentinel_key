@@ -27,6 +27,8 @@ class RawCandidateTests(unittest.TestCase):
             raw_value=RAW,
             source_line_raw=f'key="{RAW}"',
             context_raw=["# secret", f'key="{RAW}"'],
+            source_line_masked='key="AKIA...MPLE"',
+            context_masked='# secret\nkey="AKIA...MPLE"',
             secret_type_hint=SecretType.AWS_ACCESS_KEY,
             value_fingerprint=FP,
             value_masked="AKIA...MPLE",
@@ -54,13 +56,13 @@ class RawCandidateTests(unittest.TestCase):
             Route.AI_VALIDATION,
             entropy=4.2,
             regex_rules=["aws_access_key"],
-            source_line_masked='key="AKIA...MPLE"',
-            context_masked="# secret",
             is_test_context=False,
         )
         self.assertFalse(hasattr(candidate, "raw_value"))
         self.assertFalse(hasattr(candidate, "source_line_raw"))
         self.assertEqual(candidate.value_masked, "AKIA...MPLE")
+        self.assertEqual(candidate.source_line_masked, 'key="AKIA...MPLE"')
+        self.assertNotIn(RAW, candidate.context_masked)
         self.assertAlmostEqual(candidate.score_total, 1.0)
         self.assertEqual(candidate.secret_type, SecretType.AWS_ACCESS_KEY)
         self.assertIsNone(candidate.id)

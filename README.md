@@ -70,6 +70,49 @@ callback'ом `side_effects(session)` — статус задачи, резул�
 `TaskHandler` и `WorkerSettings`; сам цикл и обработчики появятся вместе с
 `orchestrator` и анализаторами.
 
+## Предобработка diff
+
+`Preprocessor` принимает `FileDiff` из `git_collector` и выдаёт
+`RawCandidate`, привязанные к `repository_id`, `commit_id`, пути файла и
+номеру строки. Он распознаёт присваивания, Bearer-токены, URL с
+credentials, PEM private key и длинные «голые» токены. Бинарные,
+lock-, vendor- и minified-файлы отсеиваются до извлечения.
+
+Для fingerprint нужен стабильный секретный HMAC-ключ. Сгенерируйте его
+один раз, сохраните в secret manager и передавайте точке запуска через
+environment. Если менять ключ между запусками, fingerprint одного и того же
+секрета изменится и дедупликация не сработает.
+
+```powershell
+$env:SENTINEL_KEY_HMAC_KEY_B64 = python -c "import base64,secrets; print(base64.b64encode(secrets.token_bytes(32)).decode())"
+```
+
+Точка сборки декодирует ключ и передаёт его в модуль явно:
+
+```python
+import base64
+import os
+
+from preprocessor import Preprocessor, PreprocessorConfig
+
+fingerprint_key = base64.b64decode(
+    os.environ["SENTINEL_KEY_HMAC_KEY_B64"],
+    validate=True,
+)
+preprocessor = Preprocessor(fingerprint_key, PreprocessorConfig())
+
+raw_candidates = preprocessor.process(
+    file_diff,
+    repository_id=repository_id,
+    commit_id=commit_id,
+)
+# Итератор RawCandidate передаётся анализатору только в памяти процесса.
+```
+
+Не сериализуйте и не логируйте `RawCandidate`: он содержит `raw_value`,
+`source_line_raw` и `context_raw`. В хранилище может попасть только
+`Candidate`, созданный через `RawCandidate.to_candidate(...)`.
+
 
 
 ## Как вести разработку

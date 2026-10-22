@@ -321,11 +321,15 @@ stateDiagram-v2
 | `raw_value` | `str` (`repr=False`) | сырое значение |
 | `source_line_raw` | `str` (`repr=False`) | исходная строка |
 | `context_raw` | `list[str]` (`repr=False`) | ±N окружающих строк |
+| `source_line_masked` | `str` | исходная строка с заменой значения на `value_masked` |
+| `context_masked` | `str` | контекст, собранный через `\n`, с той же заменой |
 | `secret_type_hint` | `SecretType` | подсказка по структуре (`BEARER_TOKEN`, `DATABASE_URL`, иначе `UNKNOWN`) |
 | `value_fingerprint` | `bytes` | HMAC-SHA256 (32 байта), считается предобработкой сразу |
 | `value_masked` | `str` | `AKIA...MPLE` |
 
-Метод `to_candidate(score, flags, route, ...) -> Candidate` строит сохраняемую модель; сырые поля в неё не попадают.
+Метод `to_candidate(score, flags, route, ...) -> Candidate` строит сохраняемую модель и
+переносит в неё только маскированные строку и контекст; сырые поля в неё
+не попадают.
 
 ---
 
@@ -501,7 +505,19 @@ stateDiagram-v2
 
 Загружаются из конфигурации, неизменяемы (`frozen`).
 
-### 4.1. `ScoringConfig`
+### 4.1. `PreprocessorConfig`
+
+| Поле | Python-тип | По умолчанию | Описание |
+|---|---|---|---|
+| `context_lines` | `int` | `2` | число строк контекста до и после добавленной строки |
+| `max_line_len` | `int` | `4096` | строки большей длины не анализируются |
+| `min_bare_token_len` | `int` | `20` | минимальная длина «голого» токена |
+| `mask_visible_chars` | `int` | `4` | число видимых символов с каждого края длинного значения |
+| `ignored_path_parts` | `frozenset[str]` | `{vendor, node_modules, dist, build, .git}` | каталоги, содержимое которых не анализируется |
+| `ignored_file_names` | `frozenset[str]` | `{package-lock.json, yarn.lock, pnpm-lock.yaml, poetry.lock, Pipfile.lock, Cargo.lock}` | lock-файлы, которые не анализируются |
+| `ignored_suffixes` | `tuple[str, ...]` | `(.lock, .min.js, .min.css)` | суффиксы lock- и minified-файлов |
+
+### 4.2. `ScoringConfig`
 
 | Поле | Python-тип | По умолчанию | Описание |
 |---|---|---|---|
@@ -512,7 +528,7 @@ stateDiagram-v2
 | `low_threshold` | `float` | `0.3` | ниже — `IGNORE` |
 | `high_threshold` | `float` | `0.7` | от — `AI_VALIDATION` |
 
-### 4.2. `IncidentPolicy`
+### 4.3. `IncidentPolicy`
 
 | Поле | Python-тип | По умолчанию | Описание |
 |---|---|---|---|
