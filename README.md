@@ -215,7 +215,7 @@ asyncio.run(main())
 `SUSPICIOUS`, даже если у корневой задачи `ai_enabled=True`. В будущем адаптер
 получит только сохранённый `Candidate` с `id` и создаст версионированную задачу
 `AI_VALIDATION` в той же транзакции. Подключайте его после реализации моделей
-AI и регистрации этого вида задачи. Отдельной CLI-команды воркера пока нет.
+AI и регистрации этого вида задачи. CLI запускает воркер через `App`.
 
 ## Orchestrator и smoke-проверка
 
@@ -239,11 +239,44 @@ orchestrator и commit worker с временной SQLite-базой, зате�
 Ожидаемый вывод: `SMOKE OK: commits_done=1, candidates=…, repeat_new=0`, где
 `candidates` больше нуля. Временные файлы удаляются после проверки.
 
-Для встраивания в приложение: сохраните `Repository`, вызовите
-`ScanOrchestrator.start_scan(repository.id, ScanTaskPayload(ai_enabled=False))`,
-затем `plan_once()`, запускайте `CommitWorker.run_once()` до пустой ленты и
-вызовите `finalize_ready()`. Для долгоживущего сервиса эти шаги повторяются
-по событиям ленты или по таймеру; отдельная CLI-команда ещё не добавлена.
+Для встраивания доступен `App` из `src/application.py`; он связывает те же
+модули и возвращает `TaskResult` после завершения дерева задач.
+
+## Запуск на локальном проекте
+
+Из корня `sentinel_key` задайте путь к исходникам и **постоянный** HMAC-ключ
+в environment. Ключ создаётся один раз; сохраните его в менеджере секретов и
+используйте при следующих запусках с этой базой (см. раздел «Предобработка
+diff»). Затем запустите:
+
+```powershell
+$env:PYTHONPATH = "src"
+$env:SENTINEL_KEY_HMAC_KEY_B64 = "<ваш ранее сохранённый base64-ключ>"
+py -3.14 -m application scan --repository "C:\path\to\project" --database "var/sentinel_key.db"
+```
+
+Требуются Python 3.11+ и установленный `git`. Для другого интерпретатора
+замените `py -3.14` на `python`. По умолчанию сканируются все refs (`--all`):
+первый запуск проходит историю, следующие обрабатывают новые и ранее
+неуспешные SHA. База и результаты сохраняются по указанному пути; повторный
+вызов возобновляет незавершённый запуск. В MVP работает только локальный Git,
+AI выключен.
+
+Варианты: `--ref main` для выбранного ref, `--batch-size 20` для размера пачки,
+`--mode targeted --target-sha <полный SHA>` для повторного анализа конкретного
+коммита. Команда печатает только id запуска, `outcome` и суммарные счётчики;
+значения кандидатов в вывод не попадают. Код выхода: `0` для `OK`, `2` для
+`PARTIAL` или ошибки параметров, `1` для `FAILED` или ошибки запуска.
+
+Из Python:
+
+```python
+from application import App
+from models import ScanTaskPayload
+
+async with App("var/sentinel_key.db", fingerprint_key) as app:
+    result = await app.scan("C:/path/to/project", ScanTaskPayload(ai_enabled=False))
+```
 
 ## Как вести разработку
 

@@ -114,6 +114,13 @@ class StorageSession:
         ).fetchone()
         return None if row is None else self._repository_from_row(row)
 
+    def get_repository_by_location(self, location: str) -> Repository | None:
+        """Найти зарегистрированный репозиторий по нормализованному пути."""
+        row = self._connection.execute(
+            "SELECT * FROM repositories WHERE location = ?", (location,)
+        ).fetchone()
+        return None if row is None else self._repository_from_row(row)
+
     def update_repository(
         self, repository: Repository, *, expected_version: int
     ) -> Repository:
@@ -292,6 +299,24 @@ class StorageSession:
         """Загрузить задачу с типизированным payload."""
         row = self._connection.execute(
             "SELECT * FROM tasks WHERE id = ?", (task_id,)
+        ).fetchone()
+        return None if row is None else self._task_from_row(row)
+
+    def get_active_scan(self, repository_id: int) -> Task | None:
+        """Найти единственный нетерминальный запуск репозитория."""
+        row = self._connection.execute(
+            """
+            SELECT * FROM tasks
+            WHERE repository_id = ? AND kind = ? AND status IN (?, ?, ?)
+            LIMIT 1
+            """,
+            (
+                repository_id,
+                int(TaskKind.REPOSITORY_SCAN),
+                int(TaskStatus.QUEUED),
+                int(TaskStatus.RUNNING),
+                int(TaskStatus.WAITING_CHILDREN),
+            ),
         ).fetchone()
         return None if row is None else self._task_from_row(row)
 

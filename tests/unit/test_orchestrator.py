@@ -78,6 +78,10 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
         first = await self.orchestrator.start_scan(
             self.repo.id, ScanTaskPayload(batch_size=1, ai_enabled=False)
         )
+        resumed = await self.orchestrator.start_scan(
+            self.repo.id, ScanTaskPayload(batch_size=2, ai_enabled=False)
+        )
+        self.assertEqual(resumed.id, first.id)
         self.assertTrue(await self.orchestrator.plan_once())
         root = await self.storage.get_task(first.id)
         self.assertEqual(root.status, TaskStatus.WAITING_CHILDREN)

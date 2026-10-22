@@ -56,13 +56,15 @@ class ScanOrchestrator:
     async def start_scan(
         self, repository_id: int, payload: ScanTaskPayload | None = None
     ) -> Task:
-        """Поставить корневую задачу с уникальным nonce запуска."""
-        return await self.feed.enqueue(
-            Task.repository_scan(
-                repository_id=repository_id,
-                payload=payload if payload is not None else ScanTaskPayload(),
-                nonce=secrets.token_bytes(16),
-            )
+        """Поставить корень либо вернуть незавершённый запуск репозитория."""
+        task = Task.repository_scan(
+            repository_id=repository_id,
+            payload=payload if payload is not None else ScanTaskPayload(),
+            nonce=secrets.token_bytes(16),
+        )
+        return await self.storage.run_in_transaction(
+            lambda session: session.get_active_scan(repository_id)
+            or session.save_task(task)
         )
 
     async def plan_once(self) -> bool:

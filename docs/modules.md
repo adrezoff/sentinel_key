@@ -6,6 +6,7 @@
 
 ```
 sentinel_key/src/
+  application.py      # точка сборки MVP и CLI для локального репозитория
   models/            # доменные классы (один файл — одна модель)
     common/          # clock, JSON codec
     repository/      # Repository, Commit, CommitParent
@@ -340,7 +341,19 @@ still_in_head=None)` выполняется синхронно внутри `Sto
 
 ---
 
-## 12. `observability/` — логи и метрики
+## 12. `application.py` — локальная точка запуска MVP
+
+`App` связывает `SqliteStorage`, `SqliteFeed`, `ScanOrchestrator`,
+`CommitWorker`, локальный `GitCollector`, `Preprocessor`, `StaticAnalyzer` и
+`IncidentManager`. При вызове `scan(...)` регистрирует локальный репозиторий,
+создаёт новый корневой запуск или возобновляет активный, планирует и выполняет
+задачи до итогового `TaskResult`. Перед циклом перевыдаёт задачи с истёкшей
+арендой. HMAC-ключ передаётся явно и не сохраняется; `ai_enabled=false` обязателен
+в MVP. CLI `python -m application scan` читает ключ из environment и выводит
+только id запуска, outcome и агрегированные счётчики. Пауза между проверками
+пустой ленты задаётся `poll_interval_s` (по умолчанию 0.25 с).
+
+## 13. `observability/` — логи и метрики
 
 **Логи.** Структурные (JSON), с полями `task_id`, `run_id`, `commit_id`, `candidate_id`. **Никогда** — сырые значения и немаскированный `source_line`.
 
