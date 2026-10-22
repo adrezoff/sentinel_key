@@ -174,13 +174,17 @@ class Task:
         *,
         repository_id: int,
         payload: CommitAnalysisPayload,
+        root_task_id: int | None = None,
         **kwargs: object,
     ) -> Task:
-        """Фабрика ``COMMIT_ANALYSIS`` с ключом по отсортированным ``commit_ids``."""
+        """Фабрика ``COMMIT_ANALYSIS`` с ключом по запуску и отсортированным id."""
         return cls(
             kind=TaskKind.COMMIT_ANALYSIS,
             repository_id=repository_id,
             payload=payload,
-            idempotency_key=key_for_commit_analysis(repository_id, payload.commit_ids),
+            root_task_id=root_task_id,
+            idempotency_key=key_for_commit_analysis(
+                repository_id, payload.commit_ids, root_task_id,
+            ),
             **kwargs,  # type: ignore[arg-type]
         )

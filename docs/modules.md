@@ -6,6 +6,7 @@
 
 ```
 sentinel_key/src/
+  application.py      # точка сборки MVP и CLI для локального репозитория
   models/            # доменные классы (один файл — одна модель)
     common/          # clock, JSON codec
     repository/      # Repository, Commit, CommitParent
@@ -197,9 +198,11 @@ flowchart LR
 - **Scan planner** — обрабатывает `REPOSITORY_SCAN`:
   1. выбирает режим: нет `PROCESSED`-коммитов → `FULL`; иначе `INCREMENTAL`; `TARGETED` — из payload;
   2. `git_collector.list_commits` → `INSERT … ON CONFLICT DO NOTHING` в `commits` (статус `PENDING`) в топологическом порядке — поэтому `Commit.id` возрастает от старых коммитов к новым;
-  3. выбирает коммиты запуска: `PENDING` и `FAILED`;
+  3. выбирает коммиты запуска: `PENDING` и `FAILED`; в режиме `TARGETED` явно указанные SHA переанализируются и при статусе `PROCESSED`;
   4. режет на пачки по `batch_size`, создаёт `COMMIT_ANALYSIS` (`payload.commit_ids`), кладёт в ленту;
   5. переводит корень в `WAITING_CHILDREN`; если работы нет — сразу `SUCCEEDED` с пустым `ScanSummary`.
+- Фактический режим и счётчики плана сохраняются в payload корня до перехода в `WAITING_CHILDREN`, чтобы finalizer после перезапуска собрал корректную сводку.
+- Ключ идемпотентности дочерней `COMMIT_ANALYSIS` включает `root_task_id`: неуспешную пачку можно повторно поставить в новом запуске.
 - **Run finalizer** — периодически и по событию завершения задачи проверяет: все ли задачи с `root_task_id = run_id` терминальны (включая `AI_VALIDATION`). Если да — агрегирует `TaskResult` в `ScanSummary`, выставляет `Outcome` (`OK`/`PARTIAL`/`FAILED`), закрывает корень, обновляет `Repository.last_scan_at`.
 
 **Триггеры.** CLI/API (`MANUAL`), планировщик (`SCHEDULE`), webhook push (`WEBHOOK`) — все только создают `REPOSITORY_SCAN`.
@@ -251,10 +254,14 @@ commit_ids → git_collector.get_diff → diff_queue(maxsize)
 
 **Конфиг:** concurrency, размеры очередей, `lease_s`, `poll_interval`, таймаут graceful shutdown.
 
-**Статус реализации.** Пока определены только общий протокол обработчика
-`TaskHandler` и неизменяемые `WorkerSettings` для claim/poll. Цикл демона,
-heartbeat-задача и graceful shutdown будут добавлены вместе с конкретным
-commit worker; предметная логика в этот каркас не включена.
+**Статус реализации.** `CommitWorker` последовательно обрабатывает коммиты
+задачи, продлевает аренду фоновым heartbeat и завершает текущую задачу перед
+остановкой цикла по `asyncio.Event`. Все кандидаты, локальные инциденты,
+статусы коммитов и `TaskResult` записываются через `Feed.complete` одной
+транзакцией. Ошибка одного коммита отмечается `Commit.FAILED`; ошибка файла
+пропускает файл. При отсутствии адаптера `AiTaskFactory` анализ идёт с
+`ai_enabled=False`, и AI-задачи не создаются. Подключение адаптера возможно
+после реализации моделей и операции `ai_validation`.
 
 ---
 
@@ -334,7 +341,19 @@ still_in_head=None)` выполняется синхронно внутри `Sto
 
 ---
 
-## 12. `observability/` — логи и метрики
+## 12. `application.py` — локальная точка запуска MVP
+
+`App` связывает `SqliteStorage`, `SqliteFeed`, `ScanOrchestrator`,
+`CommitWorker`, локальный `GitCollector`, `Preprocessor`, `StaticAnalyzer` и
+`IncidentManager`. При вызове `scan(...)` регистрирует локальный репозиторий,
+создаёт новый корневой запуск или возобновляет активный, планирует и выполняет
+задачи до итогового `TaskResult`. Перед циклом перевыдаёт задачи с истёкшей
+арендой. HMAC-ключ передаётся явно и не сохраняется; `ai_enabled=false` обязателен
+в MVP. CLI `python -m application scan` читает ключ из environment и выводит
+только id запуска, outcome и агрегированные счётчики. Пауза между проверками
+пустой ленты задаётся `poll_interval_s` (по умолчанию 0.25 с).
+
+## 13. `observability/` — логи и метрики
 
 **Логи.** Структурные (JSON), с полями `task_id`, `run_id`, `commit_id`, `candidate_id`. **Никогда** — сырые значения и немаскированный `source_line`.
 

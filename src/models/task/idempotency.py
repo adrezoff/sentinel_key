@@ -46,6 +46,12 @@ def key_for_repository_scan(repository_id: int, nonce: bytes) -> bytes:
     return short_key(TaskKind.REPOSITORY_SCAN, repository_id, nonce)
 
 
-def key_for_commit_analysis(repository_id: int, commit_ids: Sequence[int]) -> bytes:
-    """Ключ для ``COMMIT_ANALYSIS``: набор ``commit_ids`` нормализуется сортировкой."""
-    return short_key(TaskKind.COMMIT_ANALYSIS, repository_id, tuple(sorted(commit_ids)))
+def key_for_commit_analysis(
+    repository_id: int, commit_ids: Sequence[int], root_task_id: int | None = None
+) -> bytes:
+    """Ключ пачки зависит от запуска и отсортированных ``commit_ids``."""
+    return short_key(
+        TaskKind.COMMIT_ANALYSIS, repository_id,
+        root_task_id if root_task_id is not None else 0,
+        tuple(sorted(commit_ids)),
+    )
