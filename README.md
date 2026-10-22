@@ -217,6 +217,34 @@ asyncio.run(main())
 `AI_VALIDATION` в той же транзакции. Подключайте его после реализации моделей
 AI и регистрации этого вида задачи. Отдельной CLI-команды воркера пока нет.
 
+## Orchestrator и smoke-проверка
+
+`ScanOrchestrator` ставит корневую `REPOSITORY_SCAN`, получает достижимые SHA
+через `GitCollector`, сохраняет коммиты и их родителей, создаёт пачки
+`COMMIT_ANALYSIS` и переводит корень в `WAITING_CHILDREN`. После выполнения
+дочерних задач `finalize_ready()` собирает `ScanSummary` и обновляет дату
+сканирования репозитория. При первом запуске `INCREMENTAL` автоматически
+становится `FULL`; повторный запуск пропускает коммиты со статусом `PROCESSED`.
+
+Для сквозной smoke-проверки нужны Python 3.11+ и установленный Git. Из корня
+репозитория выполните:
+
+```powershell
+py -3.14 -m tests.smoke_scan
+```
+
+Если установлен другой Python 3.11+, используйте `python -m tests.smoke_scan`.
+Скрипт создаёт временный Git-репозиторий с сгенерированным значением, запускает
+orchestrator и commit worker с временной SQLite-базой, затем повторяет scan.
+Ожидаемый вывод: `SMOKE OK: commits_done=1, candidates=…, repeat_new=0`, где
+`candidates` больше нуля. Временные файлы удаляются после проверки.
+
+Для встраивания в приложение: сохраните `Repository`, вызовите
+`ScanOrchestrator.start_scan(repository.id, ScanTaskPayload(ai_enabled=False))`,
+затем `plan_once()`, запускайте `CommitWorker.run_once()` до пустой ленты и
+вызовите `finalize_ready()`. Для долгоживущего сервиса эти шаги повторяются
+по событиям ленты или по таймеру; отдельная CLI-команда ещё не добавлена.
+
 ## Как вести разработку
 
 `master` — релиз ветка, любой merge в неё считается релизом.

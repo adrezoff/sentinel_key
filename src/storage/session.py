@@ -207,6 +207,14 @@ class StorageSession:
         ).fetchone()
         return None if row is None else self._commit_from_row(row)
 
+    def has_processed_commits(self, repository_id: int) -> bool:
+        """Проверить, был ли в репозитории хотя бы один обработанный SHA."""
+        row = self._connection.execute(
+            "SELECT 1 FROM commits WHERE repository_id = ? AND status = ? LIMIT 1",
+            (repository_id, int(CommitStatus.PROCESSED)),
+        ).fetchone()
+        return row is not None
+
     def save_commit_parent(self, parent: CommitParent) -> None:
         """Идемпотентно сохранить ребро графа родителей коммита."""
         self._connection.execute(
@@ -338,6 +346,21 @@ class StorageSession:
                 int(TaskStatus.RUNNING),
                 int(TaskStatus.WAITING_CHILDREN),
             ),
+        ).fetchall()
+        return [self._task_from_row(row) for row in rows]
+
+    def list_run_tasks(self, run_id: int) -> list[Task]:
+        """Загрузить все дочерние задачи запуска для finalizer."""
+        rows = self._connection.execute(
+            "SELECT * FROM tasks WHERE root_task_id = ? ORDER BY id", (run_id,)
+        ).fetchall()
+        return [self._task_from_row(row) for row in rows]
+
+    def list_waiting_scans(self) -> list[Task]:
+        """Загрузить корневые задачи, ожидающие завершения детей."""
+        rows = self._connection.execute(
+            "SELECT * FROM tasks WHERE kind = ? AND status = ? ORDER BY id",
+            (int(TaskKind.REPOSITORY_SCAN), int(TaskStatus.WAITING_CHILDREN)),
         ).fetchall()
         return [self._task_from_row(row) for row in rows]
 

@@ -197,9 +197,11 @@ flowchart LR
 - **Scan planner** — обрабатывает `REPOSITORY_SCAN`:
   1. выбирает режим: нет `PROCESSED`-коммитов → `FULL`; иначе `INCREMENTAL`; `TARGETED` — из payload;
   2. `git_collector.list_commits` → `INSERT … ON CONFLICT DO NOTHING` в `commits` (статус `PENDING`) в топологическом порядке — поэтому `Commit.id` возрастает от старых коммитов к новым;
-  3. выбирает коммиты запуска: `PENDING` и `FAILED`;
+  3. выбирает коммиты запуска: `PENDING` и `FAILED`; в режиме `TARGETED` явно указанные SHA переанализируются и при статусе `PROCESSED`;
   4. режет на пачки по `batch_size`, создаёт `COMMIT_ANALYSIS` (`payload.commit_ids`), кладёт в ленту;
   5. переводит корень в `WAITING_CHILDREN`; если работы нет — сразу `SUCCEEDED` с пустым `ScanSummary`.
+- Фактический режим и счётчики плана сохраняются в payload корня до перехода в `WAITING_CHILDREN`, чтобы finalizer после перезапуска собрал корректную сводку.
+- Ключ идемпотентности дочерней `COMMIT_ANALYSIS` включает `root_task_id`: неуспешную пачку можно повторно поставить в новом запуске.
 - **Run finalizer** — периодически и по событию завершения задачи проверяет: все ли задачи с `root_task_id = run_id` терминальны (включая `AI_VALIDATION`). Если да — агрегирует `TaskResult` в `ScanSummary`, выставляет `Outcome` (`OK`/`PARTIAL`/`FAILED`), закрывает корень, обновляет `Repository.last_scan_at`.
 
 **Триггеры.** CLI/API (`MANUAL`), планировщик (`SCHEDULE`), webhook push (`WEBHOOK`) — все только создают `REPOSITORY_SCAN`.

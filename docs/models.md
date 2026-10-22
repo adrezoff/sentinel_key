@@ -209,7 +209,7 @@ stateDiagram-v2
 | `kind` | Состав ключа |
 |---|---|
 | `REPOSITORY_SCAN` | `kind, repository_id, случайный nonce запуска` (дубли ограничивает частичный UQ «один активный запуск») |
-| `COMMIT_ANALYSIS` | `kind, repository_id, отсортированные commit_id пачки` |
+| `COMMIT_ANALYSIS` | `kind, repository_id, root_task_id запуска, отсортированные commit_id пачки` (для самостоятельной задачи `root_task_id = NULL`) |
 | `AI_VALIDATION` | `kind, candidate_id, prompt_version` |
 
 #### 3.4.1. `TaskError` (value object)
@@ -234,6 +234,8 @@ stateDiagram-v2
 | `refs` | `list[str]` | `["--all"]` | что передать в `git rev-list` |
 | `target_shas` | `list[str]` | `[]` | только для `TARGETED` (hex) |
 | `ai_enabled` | `bool` | `true` | разрешены ли `AI_VALIDATION`-задачи в этом запуске |
+| `planned_commits_total` | `int \| None` | `None` | число SHA, достижимых по refs на момент планирования; выставляет orchestrator |
+| `planned_commits_new` | `int \| None` | `None` | число коммитов, включённых в дочерние задачи; выставляет orchestrator |
 
 **`ScanMode(IntEnum):`** `FULL = 1` (нет состояния — вся история; выбирается автоматически при первом запуске), `INCREMENTAL = 2` (коммиты `PENDING`/`FAILED` + новые), `TARGETED = 3` (явный список, переанализ).
 **`Trigger(IntEnum):`** `MANUAL = 1`, `SCHEDULE = 2`, `WEBHOOK = 3`.
@@ -293,10 +295,10 @@ stateDiagram-v2
 | `commit_ids_done` | `list[int]` | |
 | `commit_ids_failed` | `list[int]` | |
 | `lines_analyzed` | `int` | добавленные строки, прошедшие анализ |
-| `candidates_total` | `int` | всего найдено кандидатов (до фильтра по route) |
+| `candidates_total` | `int` | сохранено кандидатов после фильтра по route |
 | `suspicious` | `int` | сохранено как `SUSPICIOUS` |
 | `ai_task_ids` | `list[int]` | созданные `AI_VALIDATION` |
-| `incident_ids` | `list[int]` | инциденты, открытые локально (без LLM) |
+| `incident_ids` | `list[int]` | инциденты, созданные или обновлённые локально (без LLM) |
 
 #### 3.5.3. `AiValidationOutput` (output `AI_VALIDATION`)
 

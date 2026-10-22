@@ -36,6 +36,8 @@ class ScanTaskPayload:
     refs: list[str] = field(default_factory=_default_refs)
     target_shas: list[str] = field(default_factory=list)
     ai_enabled: bool = True
+    planned_commits_total: int | None = None
+    planned_commits_new: int | None = None
 
     def to_json_dict(self) -> dict:
         """Сериализация в JSON-совместимый dict."""
