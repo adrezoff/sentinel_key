@@ -1,1 +1,5 @@
-"""Static analyzer: regex, entropy, context, scoring, route. Implementation lives here later."""
+"""Локальные детекторы, scoring и маршрутизация кандидатов."""
+
+from .analyzer import StaticAnalyzer
+
+__all__ = ["StaticAnalyzer"]

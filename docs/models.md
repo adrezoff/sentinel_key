@@ -522,11 +522,19 @@ stateDiagram-v2
 | Поле | Python-тип | По умолчанию | Описание |
 |---|---|---|---|
 | `weight_regex` | `float` | `0.5` | вклад совпадения regex |
+| `regex_rule_weights` | `tuple[tuple[str, float], ...]` | каталог правил: `1.0` для надёжных форматов, `0.9` для JWT/AWS secret, `0.8` для пароля URL, `0.6` для Bearer, `0.5` для generic | относительная сила каждого regex-правила; имена уникальны |
 | `weight_entropy` | `float` | `0.2` | вклад высокой энтропии |
 | `weight_context` | `float` | `0.2` | вклад подозрительного имени переменной/пути |
 | `weight_token_type` | `float` | `0.1` | вклад типа токена |
 | `low_threshold` | `float` | `0.3` | ниже — `IGNORE` |
 | `high_threshold` | `float` | `0.7` | от — `AI_VALIDATION` |
+| `min_entropy_length` | `int` | `16` | минимальная длина для энтропийного признака |
+| `entropy_hex_threshold` | `float` | `3.5` | порог для hex-значений |
+| `entropy_base64_threshold` | `float` | `4.5` | порог для base64-подобных значений |
+| `entropy_other_threshold` | `float` | `3.5` | порог для остальных значений |
+| `max_analyzed_length` | `int` | `4096` | ограничение входа regex и расчёта энтропии |
+| `test_context_factor` | `float` | `0.25` | множитель балла в тестах, фикстурах и примерах |
+| `false_positive_factor` | `float` | `0.1` | множитель балла для UUID, hash, timestamp, placeholder и публичных значений |
 
 ### 4.3. `IncidentPolicy`
 

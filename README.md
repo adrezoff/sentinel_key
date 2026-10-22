@@ -115,6 +115,33 @@ raw_candidates = preprocessor.process(
 
 
 
+## Статический анализ
+
+`StaticAnalyzer` принимает каждый `RawCandidate` в памяти, проверяет формат,
+энтропию, имя переменной, путь и соседние строки, затем возвращает `Candidate`
+с баллами, флагами детекторов, именами правил и маршрутом. Placeholder, UUID,
+hash и тестовый контекст снижают балл. Пороги, веса и ограничения длины
+задаются в `ScoringConfig`.
+
+```python
+from config import ScoringConfig
+from models import Route
+from static_analyzer import StaticAnalyzer
+
+analyzer = StaticAnalyzer(ScoringConfig())
+for raw in raw_candidates:
+    candidate = await analyzer.analyze_async(raw, ai_enabled=False)
+    if candidate.route is not Route.IGNORE:
+        # Передайте candidate в транзакционную запись commit worker.
+        ...
+```
+
+При `ai_enabled=False` высокий балл даёт `SUSPICIOUS`. При включении AI
+такой кандидат получает `AI_VALIDATION`; постановка задачи относится к
+commit worker, а решение об инциденте — к `incident_manager`. Асинхронный
+вызов выносит расчёты из event loop. Для локальной проверки доступен
+синхронный `analyze(...)`. Анализатор не сохраняет данные и не вызывает сеть.
+
 ## Как вести разработку
 
 `master` — релиз ветка, любой merge в неё считается релизом.
