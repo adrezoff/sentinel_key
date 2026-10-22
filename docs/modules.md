@@ -135,14 +135,25 @@ flowchart LR
 
 | Компонент | Что делает |
 |---|---|
-| **Regex detector** | Каталог правил: AWS, GitHub, Slack, JWT, private key, Bearer, database URL, generic api_key/password. Правило: `name`, `pattern`, `secret_type`, `weight`. Предкомпилированы, защищены от ReDoS (ограничение длины входа и квантификаторов). Сработавшие имена попадают в `Candidate.regex_rules`, флаг `REGEX`. |
+| **Regex detector** | Каталог правил: AWS, GitHub, Slack, JWT, private key, Bearer, database URL, generic api_key/password. Правило: `name`, `pattern`, `secret_type`; относительный вес по имени задаётся `ScoringConfig.regex_rule_weights`. Предкомпилированы, защищены от ReDoS (ограничение длины входа и квантификаторов). Сработавшие имена попадают в `Candidate.regex_rules`, флаг `REGEX`. |
 | **Entropy calculator** | `H(X) = −Σ p(x)·log₂p(x)` по символам значения. Выполняется в `ThreadPoolExecutor(cpu_threads)` через `asyncio.to_thread`, чтобы не блокировать event loop. Порог зависит от алфавита (hex, base64, произвольный). Флаг `ENTROPY`. |
 | **Context analyzer** | Имя переменной (`password`, `secret`, `token`, `api_key`), путь файла (`.env`, `config/`, `*.pem` повышают; `test/`, `fixtures/`, `docs/`, `example` понижают), соседние строки. Выставляет `is_test_context`, флаг `CONTEXT`. |
 | **False-positive filters** | UUID, git-хеши, timestamps, placeholders (`changeme`, `xxxx`, `<your-key>`), публичные значения конфигурации. Снижают вес, но не удаляют кандидата молча. |
 | **Scorer** | `score_total = min(1.0, regex + entropy + context + token_type)`, веса из `ScoringConfig`. |
 | **Router** | `Route`: `≥ high` → `AI_VALIDATION`, `≥ low` → `SUSPICIOUS`, иначе `IGNORE`. |
 
-**Свойства.** Анализатор — детерминированная чистая функция от входа и конфигурации: это нужно для идемпотентности и воспроизводимых тестов. Сырое значение из `RawCandidate` не попадает в `Candidate`.
+**Свойства.** Признаки, score и route детерминированы входом и конфигурацией.
+`created_at` по умолчанию ставится при создании модели; для воспроизводимого
+результата вызывающий код может передать его явно. Сырое значение из
+`RawCandidate` не попадает в `Candidate`.
+
+**Локальный MVP.** `StaticAnalyzer.analyze(raw, ai_enabled=False)` по умолчанию
+понижает маршрут `AI_VALIDATION` до `SUSPICIOUS`, когда внешняя проверка
+отключена. При `ai_enabled=True` сохраняется трёхуровневая маршрутизация
+`ScoringConfig`. Синхронный `analyze` нужен для чистых проверок;
+`analyze_async` выносит расчёт в `asyncio.to_thread`. `IGNORE` возвращается
+как модель, но вызывающий модуль не сохраняет её в БД. Баллы снижаются
+коэффициентами из конфига для тестового контекста и ложных срабатываний.
 
 **Пример весов по умолчанию:** regex `+0.5`, энтропия `+0.2`, имя secret/password `+0.2`, чувствительный контекст/тип токена `+0.1`.
 
@@ -268,6 +279,16 @@ commit worker; предметная логика в этот каркас не �
 ## 10. `incident_manager/` — инциденты
 
 **Назначение.** Единственное место, где решается «это инцидент». Превращает `(Candidate, AiVerdict | None)` в создание или обновление `Incident`.
+
+**Локальная реализация MVP.** `IncidentManager.process(session, candidate,
+still_in_head=None)` выполняется синхронно внутри `Storage.run_in_transaction`.
+Кандидат к этому моменту уже сохранён и имеет `id`; это позволяет commit worker
+включить создание инцидента в общую транзакцию с остальными эффектами задачи.
+Метод принимает результат проверки HEAD от вызывающего кода, не обращаясь к Git.
+Повтор того же `candidate.id` не создаёт обнаружение или событие и не меняет
+версию инцидента. Для нового обнаружения запись `Incident`, `Occurrence` и
+`IncidentEvent` атомарна. В этой ветке вердикт не передаётся; AI-ветка и outbox
+остаются отдельным этапом.
 
 **Как работает**
 1. `decide(candidate, verdict, policy)` — правила из `models.md` (§3.9): вердикт ИИ финальный (`is_secret ∧ confidence ≥ min_ai_confidence`); без вердикта — только `trusted_formats ∧ score_total ≥ min_local_score ∧ ¬is_test_context`.

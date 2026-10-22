@@ -539,6 +539,14 @@ class StorageSession:
             ),
         )
 
+    def has_occurrence(self, incident_id: int, candidate_id: int) -> bool:
+        """Проверить повторную обработку кандидата без загрузки всего списка."""
+        row = self._connection.execute(
+            "SELECT 1 FROM occurrences WHERE incident_id = ? AND candidate_id = ?",
+            (incident_id, candidate_id),
+        ).fetchone()
+        return row is not None
+
     def list_occurrences(self, incident_id: int) -> list[Occurrence]:
         """Загрузить обнаружения инцидента в порядке времени и candidate id."""
         rows = self._connection.execute(

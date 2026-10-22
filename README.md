@@ -115,6 +115,63 @@ raw_candidates = preprocessor.process(
 
 
 
+## Статический анализ
+
+`StaticAnalyzer` принимает каждый `RawCandidate` в памяти, проверяет формат,
+энтропию, имя переменной, путь и соседние строки, затем возвращает `Candidate`
+с баллами, флагами детекторов, именами правил и маршрутом. Placeholder, UUID,
+hash и тестовый контекст снижают балл. Пороги, веса и ограничения длины
+задаются в `ScoringConfig`.
+
+```python
+from config import ScoringConfig
+from models import Route
+from static_analyzer import StaticAnalyzer
+
+analyzer = StaticAnalyzer(ScoringConfig())
+for raw in raw_candidates:
+    candidate = await analyzer.analyze_async(raw, ai_enabled=False)
+    if candidate.route is not Route.IGNORE:
+        # Передайте candidate в транзакционную запись commit worker.
+        ...
+```
+
+При `ai_enabled=False` высокий балл даёт `SUSPICIOUS`. При включении AI
+такой кандидат получает `AI_VALIDATION`; постановка задачи относится к
+commit worker, а решение об инциденте — к `incident_manager`. Асинхронный
+вызов выносит расчёты из event loop. Для локальной проверки доступен
+синхронный `analyze(...)`. Анализатор не сохраняет данные и не вызывает сеть.
+
+## Локальные инциденты
+
+`IncidentManager` открывает инцидент только по правилам `IncidentPolicy`:
+доверенный формат, достаточный `score_total` и отсутствие тестового контекста.
+Для одного fingerprint в репозитории создаётся один `Incident`; каждый новый
+кандидат добавляет `Occurrence`. Повтор того же кандидата не меняет граф.
+Закрытый инцидент вновь открывается при новом обнаружении, а подтверждённое
+наличие в HEAD повышает severity. В модуле нет вызовов Git или LLM.
+
+Вызов выполняется в транзакции вместе с записью кандидата и результатом
+задачи. `candidate` должен уже получить `id` в этой же транзакции:
+
+```python
+from incident_manager import IncidentManager
+
+manager = IncidentManager()
+
+def persist(session):
+    saved = session.save_candidate(candidate)
+    incident = manager.process(session, saved, still_in_head=None)
+    # Здесь же сохраните статус коммита и TaskResult.
+    return incident
+
+incident = await storage.run_in_transaction(persist)
+```
+
+`still_in_head` принимает `True`, `False` или `None` (проверка не выполнялась).
+Ветка AI-вердиктов и outbox будут подключены вместе с соответствующими
+модулями.
+
 ## Как вести разработку
 
 `master` — релиз ветка, любой merge в неё считается релизом.
