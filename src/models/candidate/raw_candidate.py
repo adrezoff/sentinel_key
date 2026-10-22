@@ -33,6 +33,8 @@ class RawCandidate:
     raw_value: str = field(repr=False)
     source_line_raw: str = field(repr=False)
     context_raw: list[str] = field(repr=False)
+    source_line_masked: str
+    context_masked: str
     secret_type_hint: SecretType
     value_fingerprint: bytes
     value_masked: str
@@ -61,8 +63,6 @@ class RawCandidate:
         *,
         entropy: float,
         regex_rules: list[str],
-        source_line_masked: str,
-        context_masked: str,
         is_test_context: bool,
         secret_type: SecretType | None = None,
         created_at: datetime | None = None,
@@ -80,8 +80,8 @@ class RawCandidate:
             entropy=entropy,
             regex_rules=list(regex_rules),
             detector_flags=flags,
-            source_line_masked=source_line_masked,
-            context_masked=context_masked,
+            source_line_masked=self.source_line_masked,
+            context_masked=self.context_masked,
             is_test_context=is_test_context,
             score_regex=score.regex,
             score_entropy=score.entropy,
