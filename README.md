@@ -1,5 +1,38 @@
 # sentinel_key
 
+Система асинхронного поиска секретов в Git-репозиториях и их истории. Локальные
+детекторы отбирают кандидатов, после чего при необходимости выполняется
+дополнительная AI-валидация; сырые значения секретов в хранилище не попадают.
+
+## SQLite
+
+Дополнительные пакеты не нужны: хранилище использует `sqlite3` из Python 3.11+.
+Из корня репозитория создайте или обновите базу командами PowerShell:
+
+```powershell
+$env:PYTHONPATH = "src"
+python -m storage init --database var/sentinel_key.db
+python -m storage info --database var/sentinel_key.db
+```
+
+Первая команда создаёт каталог, включает внешние ключи и WAL для файловой базы,
+затем применяет все миграции. Команды идемпотентны: `init` безопасно запускать
+при каждом старте приложения. Для временной базы в тестах передайте
+`--database :memory:`.
+
+Из Python хранилище запускается асинхронно:
+
+```python
+from storage import SqliteStorage
+
+storage = SqliteStorage("var/sentinel_key.db")
+await storage.initialize()
+try:
+    ...
+finally:
+    await storage.close()
+```
+
 
 
 ## Как вести разработку
