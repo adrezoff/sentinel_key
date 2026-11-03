@@ -55,3 +55,8 @@ def key_for_commit_analysis(
         root_task_id if root_task_id is not None else 0,
         tuple(sorted(commit_ids)),
     )
+
+
+def key_for_ai_validation(candidate_id: int, prompt_version: int) -> bytes:
+    """Ключ для задачи ``AI_VALIDATION``: candidate_id + prompt_version."""
+    return short_key(TaskKind.AI_VALIDATION, candidate_id, prompt_version)

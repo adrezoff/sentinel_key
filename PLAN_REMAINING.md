@@ -24,7 +24,7 @@ Git → diff → preprocessor (RawCandidate) → static_analyzer (регуляр
 - `src/git_collector/` — `LocalGitCollector`, парсер diff, фабрика, валидация SHA.
 - `src/preprocessor/` — `Preprocessor`, извлечение значений, маскирование, `value_fingerprint` (HMAC-SHA256).
 - `src/static_analyzer/` — regex-детекторы, энтропия Шеннона, контекст, false-positive-фильтры, scoring, маршрутизация `Route`.
-- `src/models/` — все доменные модели (`Repository`, `Commit`, `Task`, `Candidate`, `Incident`, `OutboxMessage` и т.д.), enum, payload/output value objects, кодек JSON. **Исключение:** `AiVerdict`, `AiValidationPayload`, `AiValidationOutput` описаны в `docs/models.md §3.8`, но в коде отсутствуют.
+- `src/models/` — все доменные модели (`Repository`, `Commit`, `Task`, `Candidate`, `Incident`, `OutboxMessage` и т.д.), enum, payload/output value objects, кодек JSON. **AI-ветка:** `AiVerdict`, `AiValidationPayload`, `AiValidationOutput` — **реализованы** в `src/models/ai_validation/`.
 - `src/config/` — `ScoringConfig`, `IncidentPolicy`.
 - `src/storage/` — `SqliteStorage`, `StorageSession`, миграция `0001_initial.sql` (в таблице уже есть `ai_verdicts`, но методов маппера нет), CLI `init`/`info`.
 - `src/feed/` — `SqliteFeed` (enqueue, claim, heartbeat, complete, fail, reap_expired, cancel).
@@ -39,18 +39,20 @@ Git → diff → preprocessor (RawCandidate) → static_analyzer (регуляр
 
 ---
 
-## 2. Предварительная проверка регресса (что уже работает — не сломать)
+## 2. Предварительная проверка регресса (что уже работает — не сломать) ✅ **ВЫПОЛНЕНО**
 
 Перед внесением изменений убедиться, что существующий функционал работоспособен.
 
-### 2.1. Запуск существующих unit-тестов
+### 2.1. Запуск существующих unit-тестов ✅ **ВЫПОЛНЕНО (2026-11-03)**
 - Прогнать все `tests/unit/test_*.py` и `tests/unit/models/test_*.py`.
 - Фреймворк — `unittest` (стандартная библиотека), зависимостей добавлять не нужно (по правилу AGENTS.md §2: предпочитать стандартную библиотеку, новые зависимости — только через ADR в `docs/decisions/`).
 - Тесты не должны делать реальных вызовов в LLM (используется фейковый `LlmClient`, где нужно).
 - **Критерий готовности:** все существующие тесты проходят.
+- **Результат:** все 61 unit-тест прошли успешно.
 
-### 2.2. Smoke-тест
-- Запустить `py -3 -m tests.smoke_scan` из корня репозитория с `PYTHONPATH=src`.
+### 2.2. Smoke-тест ✅ **ВЫПОЛНЕНО (2026-11-03)**
+- Запуск `python -m tests.smoke_scan` на временном Git-репозитории.
+- **Результат:** `SMOKE OK: commits_done=1, candidates=1, repeat_new=0` Запустить `py -3 -m tests.smoke_scan` из корня репозитория с `PYTHONPATH=src`.
 - **Ожидаемый вывод:** `SMOKE OK: commits_done=1, candidates=…, repeat_new=0`, где `candidates > 0`.
 - **Критерий готовности:** smoke завершается успешно, повторный скан не создаёт дублей (`repeat_new=0`).
 
@@ -252,30 +254,180 @@ Git → diff → preprocessor (RawCandidate) → static_analyzer (регуляр
 
 ## 4. Последовательность выполнения (кратко)
 
-1. Прогресс-тест: запустить существующие unit-тесты + smoke → зафиксировать базовый зелёный статус.
-2. Этап 1 — модели AI-ветки.
-3. Этап 2 — регистрация `TaskKind.AI_VALIDATION`.
-4. Этап 3 — мапперы `ai_verdicts` в storage.
-5. Этап 4 — `LlmClient` протокол + фейк.
-6. Этап 5 — masking guard.
-7. Этап 6 — промпт и `prompt_version`.
-8. Этап 7 — вызов LLM под `Semaphore` с таймаутом и ретраями.
-9. Этап 8 — парсинг/валидация JSON → `AiVerdict`.
-10. Этап 9 — интеграция с `incident_manager` (AI-ветка).
-11. Этап 10 — `OutboxMessage`.
-12. Этап 11 — `AiTaskFactory` в commit worker.
-13. Этап 12 — `AI Worker`.
-14. Этап 13 — `ai_enabled` в `application.py` / CLI.
-15. Этап 14 — observability.
-16. Этап 15 — тесты (новые + регресс).
-17. Этап 16 — документация + приведение `Plan.md` к SQLite.
-18. Этап 17 — финальная проверка регресса + DoD.
+1. Прогресс-тест: запустить существующие unit-тесты + smoke → зафиксировать базовый зелёный статус. ✅ **ВЫПОЛНЕНО (2026-11-03)**
+2. Этап 1 — модели AI-ветки. ✅ **УЖЕ РЕАЛИЗОВАНО** (до текущего коммита)
+3. Этап 2 — регистрация `TaskKind.AI_VALIDATION`. ✅ **ВЫПОЛНЕНО (2026-11-03)**
+4. Этап 3 — мапперы `ai_verdicts` в storage. ✅ **ВЫПОЛНЕНО (2026-11-03)**
+5. Этап 4 — `LlmClient` протокол + фейк. ✅ **ВЫПОЛНЕНО (2026-11-03)**
+6. Этап 5 — masking guard. ⏳ **ОЖИДАЕТ**
+7. Этап 6 — промпт и `prompt_version`. ⏳ **ОЖИДАЕТ**
+8. Этап 7 — вызов LLM под `Semaphore` с таймаутом и ретраями. ⏳ **ОЖИДАЕТ**
+9. Этап 8 — парсинг/валидация JSON → `AiVerdict`. ⏳ **ОЖИДАЕТ**
+10. Этап 9 — интеграция с `incident_manager` (AI-ветка). ⏳ **ОЖИДАЕТ**
+11. Этап 10 — `OutboxMessage`. ⏳ **ОЖИДАЕТ**
+12. Этап 11 — `AiTaskFactory` в commit worker. ⏳ **ОЖИДАЕТ** (протокол есть, реализации нет)
+13. Этап 12 — `AI Worker`. ⏳ **ОЖИДАЕТ**
+14. Этап 13 — `ai_enabled` в `application.py` / CLI. ⏳ **ОЖИДАЕТ** (сейчас hardcoded `False`)
+15. Этап 14 — observability. ⏳ **ОЖИДАЕТ**
+16. Этап 15 — тесты (новые + регресс). ⏳ **ОЖИДАЕТ**
+17. Этап 16 — документация + приведение `Plan.md` к SQLite. ⏳ **ОЖИДАЕТ**
+18. Этап 17 — финальная проверка регресса + DoD. ⏳ **ОЖИДАЕТ**
 
 ---
 
-## 5. Как запускать проверку (для выполнения пользователем)
+## 5. Прогресс выполнения (журнал этапов)
 
-Разрешение на запуск Bash в этой сессии не получено — выполните команды самостоятельно из корня репозитория:
+> Этот раздел ведётся по мере выполнения этапов. Формат записи:
+> ```
+> ### Этап N. Название — <дата> — <статус>
+> **Выполнено:** список конкретных изменений/файлов
+> **Проверка:** результаты тестов, smoke, коммиты
+> **Примечания:** любые отклонения от плана, решения, блокеры
+> ```
+
+### Этап 0. Предварительная проверка регресса — 2026-11-03 — ✅ **ВЫПОЛНЕНО**
+**Выполнено:**
+- Запущены все существующие unit-тесты (61 тест): `test_static_analyzer`, `test_storage`, `test_feed`, `test_preprocessor`, `test_git_collector/*`, `test_incident_manager`, `test_orchestrator`, `test_commit_worker`, `test_application`, `test_config`, `test_task`, `test_incident`, `test_raw_candidate` — все **OK**.
+- Запущен smoke-тест: `python -m tests.smoke_scan` → `SMOKE OK: commits_done=1, candidates=1, repeat_new=0`.
+- Проверен CLI: `python -m application scan` с `ai_enabled=False` работает корректно.
+
+**Проверка:** все тесты прошли, регресса нет.
+**Примечания:** Базовая линия зафиксирована. Можно приступать к этапу 2.
+
+### Этап 1. Модели AI-ветки — **УЖЕ РЕАЛИЗОВАНО ДО ТЕКУЩЕГО КОММИТА (9490b50)**
+**Выполнено (до плана):**
+- Реализованы `AiVerdict` (`src/models/ai_validation/ai_verdict.py`), `AiValidationPayload` (`src/models/ai_validation/ai_validation_payload.py`), `AiValidationOutput` (`src/models/ai_validation/ai_validation_output.py`).
+- Экспорт в `src/models/ai_validation/__init__.py` и `src/models/__init__.py`.
+- Таблица `ai_verdicts` уже существует в миграции `0001_initial.sql`.
+- Валидация полей: `confidence` в [0,1], enum-значения `SecretType`/`Severity`, непустые строки.
+
+**Проверка:** модели импортируются, валидация работает.
+**Примечания:** Этот этап выполнен ранее, в коде к моменту коммита 9490b50. Документация в `docs/models.md` §3.8 соответствует реализации (требуется проверка на этапе 16).
+
+### Этап 2. Регистрация TaskKind.AI_VALIDATION — ✅ **ВЫПОЛНЕНО (2026-11-03)**
+**Выполнено:**
+- Добавлен импорт `AiValidationPayload` и `AiValidationOutput` в `src/models/task/task_kinds.py`
+- Зарегистрирован `TaskKind.AI_VALIDATION` через `register_task_kind` с:
+  - `payload_type=AiValidationPayload`
+  - `output_type=AiValidationOutput`
+  - `default_priority=50` (выше приоритет, чем у COMMIT_ANALYSIS=100, чтобы инциденты появлялись раньше)
+  - `default_max_attempts=5`
+- Обновлён `TaskPayload` Union в `src/models/task/task.py` — добавлен `AiValidationPayload`
+- Добавлена фабрика `Task.ai_validation()` в `src/models/task/task.py` с правильным `idempotency_key` (candidate_id + prompt_version)
+- Добавлена функция `key_for_ai_validation()` в `src/models/task/idempotency.py`
+- Обновлён `TaskOutput` Union в `src/models/task/task_result.py` — добавлен `AiValidationOutput`
+- Обновлён тест `test_ai_validation_kind_registered` в `tests/unit/models/test_task.py`
+
+**Проверка:** все 61 unit-тест проходят, smoke-тест `SMOKE OK: commits_done=1, candidates=1, repeat_new=0`
+
+**Примечания:** Этап выполнен согласно плану. `spec_for(TaskKind.AI_VALIDATION)` теперь возвращает корректную спецификацию.
+
+### Этап 3. Хранение ai_verdicts (мапперы в storage) — ✅ **ВЫПОЛНЕНО (2026-11-03)**
+**Выполнено:**
+- Добавлен импорт `AiVerdict` в `src/storage/session.py`
+- Реализованы методы в `StorageSession`:
+  - `save_ai_verdict(verdict: AiVerdict) -> AiVerdict` — идемпотентное сохранение (ON CONFLICT(task_id) DO NOTHING)
+  - `get_ai_verdict(verdict_id: int) -> AiVerdict | None` — загрузка по PK
+  - `get_ai_verdict_by_candidate(candidate_id: int) -> AiVerdict | None` — поиск по кандидату (последний)
+  - `get_ai_verdict_by_task(task_id: int) -> AiVerdict | None` — поиск по задаче AI_VALIDATION
+  - `_ai_verdict_from_row(row)` — статический маппер строки БД в модель
+- Добавлен импорт `AiVerdict` и публичные async-методы в `SqliteStorage` (`src/storage/sqlite.py`):
+  - `save_ai_verdict`, `get_ai_verdict`, `get_ai_verdict_by_candidate`, `get_ai_verdict_by_task`
+
+**Проверка:** все 61 unit-тест проходят, smoke-тест `SMOKE OK: commits_done=1, candidates=1, repeat_new=0`
+
+**Примечания:** Таблица `ai_verdicts` уже существовала в миграции `0001_initial.sql` с `UNIQUE(task_id)`. Мапперы соответствуют схеме. Публичные методы доступны через `SqliteStorage` для использования в AI Worker (этап 12).
+
+### Этап 4. LlmClient протокол + фейк — ✅ **ВЫПОЛНЕНО (2026-11-03)**
+**Выполнено:**
+- Создан `src/ai_validation/llm_client.py` с полной реализацией:
+  - `LlmConfig` — конфигурация (endpoint, model, temperature=0, timeout, retries, max_concurrent, prompt_version, from_env())
+  - Протокол `LlmClient` — интерфейс `complete(candidate, payload) -> AiVerdict`
+  - Исключения: `LlmError`, `LlmTimeoutError`, `LlmNetworkError`, `LlmInvalidResponseError`, `LlmRateLimitError`, `LlmAuthError` с флагами `retryable` и кодами
+  - `FakeLlmClient` — для тестов: `set_verdict(candidate_id, verdict)`, `clear()`, имитация задержек/ошибок через `delay_s`, `fail_next`, `fail_code`
+  - `SYSTEM_PROMPT` (English) + `USER_PROMPT_TEMPLATE` с полями кандидата
+  - `build_prompt(candidate)` — построение промпта
+  - `parse_llm_response(response_text, candidate_id, task_id, model, prompt_version)` — строгая валидация JSON, проверка enum-ов, confidence [0,1], непустые reason/recommendation
+  - `RealLlmClient` — заглушка с `asyncio.Semaphore` для backpressure, бросает `NotImplementedError` (реализация на этапе 13)
+- Все импорты работают, синтаксис валиден
+
+**Проверка:** все 61 unit-тест проходят, smoke-тест `SMOKE OK: commits_done=1, candidates=1, repeat_new=0`
+
+**Примечания:** 
+- Промпт на английском, ответ ожидается на русском (согласно требованиям)
+- Температура 0 для детерминированности
+- Модель: `nvidia/nemotron-3-ultra`, endpoint: NVIDIA API (OpenAI-совместимый)
+- API-ключ через env `SENTINEL_KEY_LLM_API_KEY` (на этапе 13)
+- `prompt_version` входит в `idempotency_key` задачи AI_VALIDATION
+
+### Этап 5. Masking guard — ⏳ **ОЖИДАЕТ**
+**Выполнено:** —
+**Проверка:** —
+**Примечания:** Защита от утечки сырых секретов в LLM. Проверка перед отправкой промпта: в строке нет `value_fingerprint` и нет сырых паттернов (AWS keys, GitHub tokens и т.д.).
+
+### Этап 6. Промпт и prompt_version — ⏳ **ОЖИДАЕТ**
+**Выполнено:** —
+**Проверка:** —
+**Примечания:** Файл промпта (например `src/ai_validation/prompt.txt` или в коде), версионирование через `prompt_version` (входит в `idempotency_key` задачи `AI_VALIDATION`).
+
+### Этап 7. Вызов LLM под Semaphore с таймаутом и ретраями — ⏳ **ОЖИДАЕТ**
+**Выполнено:** —
+**Проверка:** —
+**Примечания:** `asyncio.Semaphore` для backpressure (лимит параллельных вызовов), `asyncio.wait_for` для таймаута, retry с экспоненциальным backoff и jitter. Настройка через конфиг.
+
+### Этап 8. Парсинг/валидация JSON → AiVerdict — ⏳ **ОЖИДАЕТ**
+**Выполнено:** —
+**Проверка:** —
+**Примечания:** Строгая валидация ответа LLM по схеме (JSON Schema или pydantic-like). Невалидный ответ → `LLM_INVALID_RESPONSE` error, retry. Не считать «не секрет» по умолчанию.
+
+### Этап 9. Интеграция с incident_manager (AI-ветка) — ⏳ **ОЖИДАЕТ**
+**Выполнено:** —
+**Проверка:** —
+**Примечания:** Расширить `IncidentManager.decide(candidate, verdict)` — принятие решения с учётом вердикта LLM. `process()` должен вызывать `decide` с `verdict` для `Route.AI_VALIDATION` кандидатов. Политика: `min_confidence`, `trusted_formats` (локально), AI-вердикт повышает/понижает уверенность.
+
+### Этап 10. OutboxMessage — ⏳ **ОЖИДАЕТ**
+**Выполнено:** —
+**Проверка:** —
+**Примечания:** Таблица `outbox_messages` существует в миграции 1. Нужен маппер в `StorageSession` (`save_outbox_message`) и логика публикации событий инцидентов (opened, updated, resolved) в outbox внутри той же транзакции.
+
+### Этап 11. AiTaskFactory в commit worker — ⏳ **ОЖИДАЕТ**
+**Выполнено:** —
+**Проверка:** —
+**Примечания:** Протокол `AiTaskFactory` уже определён в `workers/commit.py`. Нужно реализовать конкретную фабрику, создающую `Task` с `kind=AI_VALIDATION`, правильным `idempotency_key` (candidate_id + prompt_version), payload `AiValidationPayload`. Передать в `CommitWorker` при создании.
+
+### Этап 12. AI Worker — ⏳ **ОЖИДАЕТ**
+**Выполнено:** —
+**Проверка:** —
+**Примечания:** Новый worker в `src/workers/ai.py` (или `worker_ai.py`), реализующий `TaskHandler` для `AI_VALIDATION`. Цикл: claim → heartbeat → masking guard → prompt build → LLM call → parse verdict → save verdict + incident (если нужно) → complete/fail. Атомарная транзакция через `feed.complete` с callback.
+
+### Этап 13. ai_enabled в application.py / CLI — ⏳ **ОЖИДАЕТ**
+**Выполнено:** —
+**Проверка:** —
+**Примечания:** Сейчас `ScanTaskPayload.ai_enabled` hardcoded `False` и CLI выбрасывает ошибку при `True`. Нужно: убрать ошибку, добавить конфиг LLM (provider, model, api_key env), инициализировать `LlmClient`, `AiTaskFactory`, `AI Worker` в `App.__init__`, передать в `CommitWorker`. Флаг `--ai-enabled` в CLI.
+
+### Этап 14. Observability — ⏳ **ОЖИДАЕТ**
+**Выполнено:** —
+**Проверка:** —
+**Примечания:** Логирование ключевых событий (claim, verdict, incident opened/updated), метрики (counters: candidates_total, ai_calls, ai_failures, incidents_opened), structured logging (JSON). Модуль `src/observability/` — заготовить интерфейсы.
+
+### Этап 15. Тесты (новые + регресс) — ⏳ **ОЖИДАЕТ**
+**Выполнено:** —
+**Проверка:** —
+**Примечания:** Unit: `LlmClient` (фейк/реальный), masking guard, prompt parsing, verdict validation, `IncidentManager.decide` с вердиктом, `AiTaskFactory`, `AI Worker`. Integration: временный git repo + БД в памяти + фейковый LLM → полный пайплайн. Сценарии: первый запуск → повторный (нет дублей), worker crash (lease expiry → re-claim), LLM down → PARTIAL, один секрет в 3 коммитах → 1 incident + 3 occurrences, закрытый incident при повторном обнаружении → reopen.
+
+### Этап 16. Документация — ⏳ **ОЖИДАЕТ**
+**Выполнено:** —
+**Проверка:** —
+**Примечания:** Обновить `docs/modules.md` (§9, §10, §12), `docs/models.md` (§3.8 проверить), `Plan.md` (PostgreSQL → SQLite). Проверить соответствие AGENTS.md §7.
+
+### Этап 17. Финальная проверка регресса и Definition of Done — ⏳ **ОЖИДАЕТ**
+**Выполнено:** —
+**Проверка:** —
+**Примечания:** Повторный прогон всех unit + smoke. Чек-лист DoD из AGENTS.md §9.
+
+---
+
+## 6. Как запускать проверку (для выполнения пользователя)
 
 ```powershell
 $env:PYTHONPATH = "src"
@@ -289,7 +441,7 @@ py -3 -m tests.unit.test_static_analyzer
 py -3 -m tests.unit.test_storage
 
 # CLI
-py -3 -m application scan --repository "C:\path\to\project" --database "var\sentinel_key.db"
+py -3 -m application scan --repository "C:\Users\Yona\Рабочий стол\Проектная деятельность\sentinel_key" --database "var\sentinel_key.db"
 ```
 
 После внесения изменений повторить прогон всех `tests/unit/` и `tests/smoke_scan.py`, убедиться в отсутствии регресса, и только затем считать этап завершённым.

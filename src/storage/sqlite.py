@@ -10,7 +10,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TypeVar
 
-from models import Candidate, Commit, Repository, Task, TaskResult
+from models import AiVerdict, Candidate, Commit, Repository, Task, TaskResult
 
 from .exceptions import StorageError, StorageNotInitializedError
 from .session import StorageSession
@@ -111,6 +111,22 @@ class SqliteStorage:
     async def get_candidate(self, candidate_id: int) -> Candidate | None:
         """Загрузить кандидата по id."""
         return await self.read(lambda session: session.get_candidate(candidate_id))
+
+    async def save_ai_verdict(self, verdict: AiVerdict) -> AiVerdict:
+        """Идемпотентно сохранить вердикт ИИ в отдельной транзакции."""
+        return await self.run_in_transaction(lambda session: session.save_ai_verdict(verdict))
+
+    async def get_ai_verdict(self, verdict_id: int) -> AiVerdict | None:
+        """Загрузить вердикт ИИ по id."""
+        return await self.read(lambda session: session.get_ai_verdict(verdict_id))
+
+    async def get_ai_verdict_by_candidate(self, candidate_id: int) -> AiVerdict | None:
+        """Найти вердикт ИИ по кандидату."""
+        return await self.read(lambda session: session.get_ai_verdict_by_candidate(candidate_id))
+
+    async def get_ai_verdict_by_task(self, task_id: int) -> AiVerdict | None:
+        """Найти вердикт ИИ по задаче AI_VALIDATION."""
+        return await self.read(lambda session: session.get_ai_verdict_by_task(task_id))
 
     async def schema_version(self) -> int:
         """Вернуть последнюю применённую версию миграции."""

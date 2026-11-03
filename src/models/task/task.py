@@ -7,11 +7,13 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Union
 
+from ..ai_validation.ai_validation_payload import AiValidationPayload
 from ..common.clock import utc_now
 from ..exceptions import InvalidTransition
 from .commit_analysis_payload import CommitAnalysisPayload
 from .idempotency import (
     KEY_SIZE,
+    key_for_ai_validation,
     key_for_commit_analysis,
     key_for_repository_scan,
 )
@@ -26,7 +28,7 @@ from .task_kinds import (
     spec_for,
 )
 
-TaskPayload = Union[ScanTaskPayload, CommitAnalysisPayload]
+TaskPayload = Union[ScanTaskPayload, CommitAnalysisPayload, AiValidationPayload]
 
 DEFAULT_RETRY_BASE = timedelta(seconds=1)
 
@@ -186,5 +188,26 @@ class Task:
             idempotency_key=key_for_commit_analysis(
                 repository_id, payload.commit_ids, root_task_id,
             ),
+            **kwargs,  # type: ignore[arg-type]
+        )
+
+    @classmethod
+    def ai_validation(
+        cls,
+        *,
+        repository_id: int,
+        payload: AiValidationPayload,
+        root_task_id: int | None = None,
+        parent_task_id: int | None = None,
+        **kwargs: object,
+    ) -> Task:
+        """Фабрика ``AI_VALIDATION`` с ключом идемпотентности candidate_id + prompt_version."""
+        return cls(
+            kind=TaskKind.AI_VALIDATION,
+            repository_id=repository_id,
+            payload=payload,
+            root_task_id=root_task_id,
+            parent_task_id=parent_task_id,
+            idempotency_key=key_for_ai_validation(payload.candidate_id, payload.prompt_version),
             **kwargs,  # type: ignore[arg-type]
         )
