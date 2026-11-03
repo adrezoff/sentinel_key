@@ -360,19 +360,161 @@ def parse_llm_response(response_text: str, candidate_id: int, task_id: int, mode
 
 
 # ---------------------------------------------------------------------------
-# Реальный клиент (заглушка для этапа 13)
+# Реальный HTTP-клиент для NVIDIA Nemotron 3 Ultra (OpenAI-совместимый API)
 # ---------------------------------------------------------------------------
 
 class RealLlmClient:
     """Реальный HTTP-клиент для NVIDIA Nemotron 3 Ultra (OpenAI-совместимый API).
 
-    Полноценная реализация будет добавлена на этапе 13 вместе с API-ключом.
-    Сейчас — заглушка, бросающая NotImplementedError.
+    Поддерживает:
+    - Semaphore для backpressure (лимит параллельных вызовов)
+    - Таймаут через asyncio.wait_for
+    - Retry с экспоненциальным backoff и jitter
+    - Структурированные ошибки (LlmError и наследники)
     """
 
     def __init__(self, config: LlmConfig | None = None) -> None:
         self._config = config or LlmConfig()
         self._semaphore = asyncio.Semaphore(self._config.max_concurrent)
+
+    async def complete(
+        self,
+        candidate: Candidate,
+        payload: AiValidationPayload,
+    ) -> AiVerdict:
+        """Вызвать LLM с ретраями, таймаутом и семафором.
+
+        Args:
+            candidate: Кандидат с маскированными данными.
+            payload: Параметры задачи (candidate_id, prompt_version, model override).
+
+        Returns:
+            Валидированный AiVerdict.
+
+        Raises:
+            LlmTimeoutError: превышен таймаут.
+            LlmNetworkError: сетевая ошибка.
+            LlmInvalidResponseError: невалидный ответ LLM.
+            LlmAuthError: ошибка аутентификации (401/403).
+            LlmRateLimitError: превышен rate limit (429).
+        """
+        if self._config.api_key is None:
+            raise LlmAuthError("API key not configured. Set SENTINEL_KEY_LLM_API_KEY.")
+
+        system_prompt, user_prompt = build_prompt(candidate)
+        model = payload.model or self._config.model
+
+        # Подготовка запроса к OpenAI-совместимому API
+        request_body = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": self._config.temperature,
+            "max_tokens": self._config.max_tokens,
+        }
+        data = json.dumps(request_body).encode("utf-8")
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self._config.api_key}",
+        }
+
+        last_exception: LlmError | None = None
+
+        for attempt in range(1, self._config.max_attempts + 1):
+            try:
+                async with self._semaphore:
+                    verdict = await self._call_with_timeout(data, headers, payload.prompt_version)
+                    return verdict
+
+            except LlmTimeoutError:
+                last_exception = LlmTimeoutError(f"Attempt {attempt}/{self._config.max_attempts} timed out")
+            except LlmRateLimitError:
+                last_exception = LlmRateLimitError(f"Attempt {attempt}/{self._config.max_attempts} rate limited")
+            except LlmAuthError:
+                # Auth errors are not retryable
+                raise
+            except LlmNetworkError as e:
+                last_exception = e
+            except LlmInvalidResponseError as e:
+                last_exception = e
+
+            # Если это не последняя попытка — ждём с экспоненциальным backoff + jitter
+            if attempt < self._config.max_attempts:
+                wait_time = self._config.retry_base_s * (2 ** (attempt - 1))
+                jitter = random.uniform(0, wait_time * 0.1)  # ±10% jitter
+                await asyncio.sleep(wait_time + jitter)
+
+        # Все попытки исчерпаны
+        if last_exception:
+            raise last_exception
+        raise LlmNetworkError("All attempts failed without a specific error")
+
+    async def _call_with_timeout(
+        self,
+        data: bytes,
+        headers: dict[str, str],
+        prompt_version: int,
+    ) -> AiVerdict:
+        """Выполнить HTTP-запрос с таймаутом и парсингом ответа."""
+        request = urllib.request.Request(
+            self._config.api_endpoint,
+            data=data,
+            headers=headers,
+            method="POST",
+        )
+
+        try:
+            # asyncio.wait_for для таймаута
+            response = await asyncio.wait_for(
+                asyncio.to_thread(self._do_request, request),
+                timeout=self._config.timeout_s,
+            )
+        except asyncio.TimeoutError as e:
+            raise LlmTimeoutError(f"Request timed out after {self._config.timeout_s}s") from e
+        except urllib.error.HTTPError as e:
+            self._handle_http_error(e)
+        except urllib.error.URLError as e:
+            raise LlmNetworkError(f"Network error: {e.reason}") from e
+
+        # Парсинг ответа
+        try:
+            response_data = json.loads(response.decode("utf-8"))
+        except json.JSONDecodeError as e:
+            raise LlmInvalidResponseError(f"Invalid JSON response: {e}") from e
+
+        # Извлечение контента из OpenAI-совместимого ответа
+        try:
+            content = response_data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as e:
+            raise LlmInvalidResponseError(f"Unexpected response structure: {e}") from e
+
+        # Парсинг и валидация вердикта
+        return parse_llm_response(
+            content,
+            candidate_id=0,  # будет перезаписан в AI Worker
+            task_id=0,       # будет перезаписан в AI Worker
+            model=self._config.model,
+            prompt_version=prompt_version,
+        )
+
+    def _do_request(self, request: urllib.request.Request) -> bytes:
+        """Синхронный HTTP-запрос (выполняется в thread pool)."""
+        with urllib.request.urlopen(request) as response:
+            return response.read()
+
+    @staticmethod
+    def _handle_http_error(error: urllib.error.HTTPError) -> None:
+        """Преобразовать HTTP-ошибку в LlmError."""
+        if error.code == 401 or error.code == 403:
+            raise LlmAuthError(f"Authentication failed: {error.code}")
+        if error.code == 429:
+            raise LlmRateLimitError(f"Rate limit exceeded: {error.code}")
+        if 500 <= error.code < 600:
+            raise LlmNetworkError(f"Server error: {error.code}")
+        raise LlmNetworkError(f"HTTP error: {error.code}")
 
     @property
     def prompt_version(self) -> int:
@@ -381,13 +523,3 @@ class RealLlmClient:
     @property
     def max_concurrent(self) -> int:
         return self._config.max_concurrent
-
-    async def complete(
-        self,
-        candidate: Candidate,
-        payload: AiValidationPayload,
-    ) -> AiVerdict:
-        raise NotImplementedError(
-            "RealLlmClient will be implemented in Stage 13 with API key. "
-            "Use FakeLlmClient for testing."
-        )

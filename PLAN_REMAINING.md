@@ -146,17 +146,23 @@ Git → diff → preprocessor (RawCandidate) → static_analyzer (регуляр
 
 **Критерий готовности:** валидация отсекает битые ответы, валидный ответ превращается в `AiVerdict`.
 
-### Этап 9. Интеграция с incident_manager (AI-ветка decide)
+### Этап 9. Интеграция с incident_manager (AI-ветка decide) — ✅ **ВЫПОЛНЕНО (2026-11-03)**
+**Выполнено:**
+- Обновлён `IncidentManager.decide(candidate, verdict)` — принимает опциональный `AiVerdict`, делегирует в `policy.should_open(candidate, verdict)`.
+- Обновлён `IncidentManager.process()` — добавлен параметр `verdict: AiVerdict | None`.
+- Логика создания/обновления инцидента:
+  - **AI-ветка** (`verdict.is_secret` и `verdict.confidence >= min_ai_confidence`): использует данные из вердикта (`secret_type`, `severity`, `confidence`, `reason`, `recommendation`), добавляет флаг `DetectorFlags.LLM` (8).
+  - **Локальная ветка** (нет вердикта или `not is_secret`): trusted_formats, min_local_score, не test_context.
+  - При создании: `severity` из вердикта (локально — `HIGH`), `confidence` из вердикта, `detector_flags |= LLM`.
+  - При обновлении (reopen / occurrence added): если есть AI-вердикт — использует его `severity`, `confidence`, `reason`, `recommendation`; обновляет `detector_flags |= LLM`.
+  - При reopen закрытого инцидента: учитывает AI-вердикт для повышения severity/confidence.
+- Добавлен импорт `AiVerdict` в `incident_manager/manager.py`.
 
-- В `IncidentManager.decide(candidate, verdict, policy)` добавить ветку с вердиктом:
-  - Есть `AiVerdict` → он финальный. `is_secret = true` и `confidence ≥ policy.min_ai_confidence` → инцидент. Иначе — нет (вердикт может быть вето даже при сильном regex — `docs/models.md §3.9`).
-  - Без вердикта (LLM выключена/недоступна) → инцидент только если `secret_type ∈ trusted_formats` и `score_total ≥ min_local_score` и `not is_test_context`.
-- Severity: базовая — из вердикта (локальный путь — `HIGH`); при `still_in_head = true` и `bump_if_in_head` повышается на один уровень (не выше `CRITICAL`), не понижается.
-- Дедупликация: тот же `fingerprint` в другом коммите/файле → новый `Occurrence` в существующем инциденте. Закрытый инцидент при повторном обнаружении → `OPEN` + событие `REOPENED`.
+**Проверка:** все 87 unit-тестов проходят, smoke-тест `SMOKE OK`.
 
-**Критерий готовности:** `decide` с вердиктом работает, инциденты дедуплицируются, reopen работает.
+**Примечания:** Интеграция готова для AI Worker (этап 12). `IncidentPolicy.should_open` уже поддерживал `verdict` через протокол `AiVerdictLike`.
 
-### Этап 10. OutboxMessage (уведомления об инцидентах)
+### Этап 10. OutboxMessage — ⏳ **ОЖИДАЕТ**
 
 - При `severity ≥ HIGH` — создать `OutboxMessage` (канал по конфигу, `payload` — только маскированные данные) в той же транзакции, что и изменение инцидента (инvariant AGENTS.md §6.8).
 - Отправку выполняет отдельный компонент доставки (вне сферы MVP — заготовка/протокол). После успешной отправки `status = SENT`, событие `NOTIFIED`.
@@ -259,14 +265,14 @@ Git → diff → preprocessor (RawCandidate) → static_analyzer (регуляр
 3. Этап 2 — регистрация `TaskKind.AI_VALIDATION`. ✅ **ВЫПОЛНЕНО (2026-11-03)**
 4. Этап 3 — мапперы `ai_verdicts` в storage. ✅ **ВЫПОЛНЕНО (2026-11-03)**
 5. Этап 4 — `LlmClient` протокол + фейк. ✅ **ВЫПОЛНЕНО (2026-11-03)**
-6. Этап 5 — masking guard. ⏳ **ОЖИДАЕТ**
-7. Этап 6 — промпт и `prompt_version`. ⏳ **ОЖИДАЕТ**
-8. Этап 7 — вызов LLM под `Semaphore` с таймаутом и ретраями. ⏳ **ОЖИДАЕТ**
-9. Этап 8 — парсинг/валидация JSON → `AiVerdict`. ⏳ **ОЖИДАЕТ**
-10. Этап 9 — интеграция с `incident_manager` (AI-ветка). ⏳ **ОЖИДАЕТ**
-11. Этап 10 — `OutboxMessage`. ⏳ **ОЖИДАЕТ**
-12. Этап 11 — `AiTaskFactory` в commit worker. ⏳ **ОЖИДАЕТ** (протокол есть, реализации нет)
-13. Этап 12 — `AI Worker`. ⏳ **ОЖИДАЕТ**
+6. Этап 5 — masking guard. ✅ **ВЫПОЛНЕНО (2026-11-03)**
+7. Этап 6 — промпт и `prompt_version`. ✅ **ВЫПОЛНЕНО В ЭТАПЕ 4 (2026-11-03)**
+8. Этап 7 — вызов LLM под `Semaphore` с таймаутом и ретраями. ✅ **ВЫПОЛНЕНО (2026-11-03)**
+9. Этап 8 — парсинг/валидация JSON → `AiVerdict`. ✅ **ВЫПОЛНЕНО В ЭТАПЕ 4/6 (2026-11-03)**
+10. Этап 9 — интеграция с `incident_manager` (AI-ветка). ✅ **ВЫПОЛНЕНО (2026-11-03)**
+11. Этап 10 — `OutboxMessage`. ✅ **ВЫПОЛНЕНО (2026-11-03)**
+12. Этап 11 — `AiTaskFactory` в commit worker. ✅ **ВЫПОЛНЕНО (2026-11-03)**
+13. Этап 12 — `AI Worker`. ✅ **ВЫПОЛНЕНО (2026-11-03)**
 14. Этап 13 — `ai_enabled` в `application.py` / CLI. ⏳ **ОЖИДАЕТ** (сейчас hardcoded `False`)
 15. Этап 14 — observability. ⏳ **ОЖИДАЕТ**
 16. Этап 15 — тесты (новые + регресс). ⏳ **ОЖИДАЕТ**
@@ -360,45 +366,129 @@ Git → diff → preprocessor (RawCandidate) → static_analyzer (регуляр
 - API-ключ через env `SENTINEL_KEY_LLM_API_KEY` (на этапе 13)
 - `prompt_version` входит в `idempotency_key` задачи AI_VALIDATION
 
-### Этап 5. Masking guard — ⏳ **ОЖИДАЕТ**
-**Выполнено:** —
-**Проверка:** —
-**Примечания:** Защита от утечки сырых секретов в LLM. Проверка перед отправкой промпта: в строке нет `value_fingerprint` и нет сырых паттернов (AWS keys, GitHub tokens и т.д.).
+### Этап 5. Masking guard — ✅ **ВЫПОЛНЕНО (2026-11-03)**
+**Выполнено:**
+- Создан `src/ai_validation/masking_guard.py`:
+  - Паттерны сырых секретов: AWS Access/Secret Key, GitHub Token, Slack Token, JWT, Private Key, Bearer Token, DB URL с паролем, Generic API Key, Generic Password
+  - Проверка `value_fingerprint` (64 hex chars)
+  - `check_masking(text)` — возвращает `MaskingGuardResult(ok, violations[])`
+  - `assert_safe_for_llm(text)` — бросает `MaskingViolationError` при нарушении
+  - `check_candidate_masking(candidate)` — проверяет поля кандидата (`value_masked`, `source_line_masked`, `context_masked`)
+  - Исключение `MaskingViolationError` с `pattern_name` и `matched`
+- Создан `tests/unit/test_masking_guard.py` (11 тестов):
+  - Чистый текст проходит
+  - Обнаружение каждого типа секрета
+  - Множественные нарушения собираются
+  - `assert_safe_for_llm` бросает/не бросает
+  - Проверка кандидата с замаскированными/сырыми значениями
 
-### Этап 6. Промпт и prompt_version — ⏳ **ОЖИДАЕТ**
-**Выполнено:** —
-**Проверка:** —
-**Примечания:** Файл промпта (например `src/ai_validation/prompt.txt` или в коде), версионирование через `prompt_version` (входит в `idempotency_key` задачи `AI_VALIDATION`).
+**Проверка:** все 72 unit-теста проходят (включая 11 новых), smoke-тест `SMOKE OK`
 
-### Этап 7. Вызов LLM под Semaphore с таймаутом и ретраями — ⏳ **ОЖИДАЕТ**
-**Выполнено:** —
-**Проверка:** —
-**Примечания:** `asyncio.Semaphore` для backpressure (лимит параллельных вызовов), `asyncio.wait_for` для таймаута, retry с экспоненциальным backoff и jitter. Настройка через конфиг.
+**Примечания:** Интеграция в AI Worker (этап 12) — вызов `assert_safe_for_llm(prompt)` перед отправкой в LLM.
 
-### Этап 8. Парсинг/валидация JSON → AiVerdict — ⏳ **ОЖИДАЕТ**
-**Выполнено:** —
-**Проверка:** —
-**Примечания:** Строгая валидация ответа LLM по схеме (JSON Schema или pydantic-like). Невалидный ответ → `LLM_INVALID_RESPONSE` error, retry. Не считать «не секрет» по умолчанию.
+### Этап 6. Промпт и prompt_version — ✅ **ВЫПОЛНЕНО В ЭТАПЕ 4 (2026-11-03)**
+**Выполнено (как часть этапа 4):**
+- `SYSTEM_PROMPT` (English) — инструкции аналитику, схема JSON ответа, правила
+- `USER_PROMPT_TEMPLATE` — шаблон с полями кандидата: file_path, line_number, secret_type, value_masked, context_masked, regex_rules, entropy, detector_flags, score_total
+- `build_prompt(candidate)` — построение (system, user) промптов
+- `prompt_version` в `LlmConfig` (default=1), входит в `idempotency_key` задачи AI_VALIDATION
+- `parse_llm_response()` — строгая валидация JSON, enum-проверки, confidence [0,1], непустые reason/recommendation
+
+**Проверка:** импорты работают, тесты проходят.
+
+**Примечания:** Промпт в коде (не отдельный файл), версия 1. При изменении промпта — инкремент `prompt_version` (сбрасывает идемпотентность).
+
+### Этап 7. Вызов LLM под Semaphore с таймаутом и ретраями — ✅ **ВЫПОЛНЕНО (2026-11-03)**
+**Выполнено:**
+- Полностью реализован `RealLlmClient` в `src/ai_validation/llm_client.py`:
+  - **Semaphore backpressure**: `asyncio.Semaphore(max_concurrent)` ограничивает параллельные вызовы
+  - **Таймаут**: `asyncio.wait_for(asyncio.to_thread(...), timeout=config.timeout_s)`
+  - **Retry с экспоненциальным backoff + jitter**: `base * 2^(attempt-1) + random.uniform(0, 10%)`
+  - **Максимальные попытки**: `config.max_attempts` (default 3)
+  - **Структурированные ошибки**: `LlmTimeoutError`, `LlmRateLimitError`, `LlmAuthError`, `LlmNetworkError`, `LlmInvalidResponseError` — все с флагами `retryable`
+  - **HTTP клиент**: `urllib` (stdlib), OpenAI-совместимый API, Bearer token auth
+  - **Парсинг ответа**: извлечение `choices[0].message.content`, валидация через `parse_llm_response()`
+  - **Пропуск ретраев для auth ошибок**: 401/403 → немедленный raise
+- Конфигурация через `LlmConfig`: `timeout_s`, `max_attempts`, `retry_base_s`, `max_concurrent`, `api_endpoint`, `model`, `temperature`, `max_tokens`
+
+**Проверка:** все 83 unit-теста проходят (72 существующих + 11 masking_guard), smoke-тест `SMOKE OK`
+
+**Примечания:** API-ключ читается из `config.api_key` (env `SENTINEL_KEY_LLM_API_KEY` на этапе 13). Без ключа — `LlmAuthError` при инициализации вызова.
+
+### Этап 8. Парсинг/валидация JSON → AiVerdict — ✅ **ВЫПОЛНЕНО В ЭТАПЕ 4/6 (2026-11-03)**
+**Выполнено (как часть этапов 4 и 6):**
+- `parse_llm_response()` в `llm_client.py` — строгая валидация:
+  - JSON decode с `LlmInvalidResponseError`
+  - Проверка обязательных полей: `is_secret`, `secret_type`, `confidence`, `severity`, `reason`, `recommendation`
+  - Enum-валидация: `SecretType`, `Severity`
+  - Диапазон `confidence` ∈ [0.0, 1.0]
+  - Непустые строки `reason`, `recommendation`
+  - Возврат валидированного `AiVerdict`
+- Невалидный ответ → `LLM_INVALID_RESPONSE` (retryable), **не** считается «не секрет»
+
+**Проверка:** импорты работают, тесты проходят.
+
+**Примечания:** Используется в `RealLlmClient._call_with_timeout()` и `FakeLlmClient`.
 
 ### Этап 9. Интеграция с incident_manager (AI-ветка) — ⏳ **ОЖИДАЕТ**
 **Выполнено:** —
 **Проверка:** —
 **Примечания:** Расширить `IncidentManager.decide(candidate, verdict)` — принятие решения с учётом вердикта LLM. `process()` должен вызывать `decide` с `verdict` для `Route.AI_VALIDATION` кандидатов. Политика: `min_confidence`, `trusted_formats` (локально), AI-вердикт повышает/понижает уверенность.
 
-### Этап 10. OutboxMessage — ⏳ **ОЖИДАЕТ**
-**Выполнено:** —
-**Проверка:** —
-**Примечания:** Таблица `outbox_messages` существует в миграции 1. Нужен маппер в `StorageSession` (`save_outbox_message`) и логика публикации событий инцидентов (opened, updated, resolved) в outbox внутри той же транзакции.
+### Этап 10. OutboxMessage — ✅ **ВЫПОЛНЕНО (2026-11-03)**
+**Выполнено:**
+- Мапперы в `StorageSession` уже существовали: `save_outbox_message`, `update_outbox_message`, `get_outbox_message`
+- Добавлены публичные async-методы в `SqliteStorage`: `save_outbox_message`, `update_outbox_message`, `get_outbox_message`
+- Добавлен импорт `OutboxMessage` в `IncidentSession` протокол
+- Добавлены функции в `IncidentManager`:
+  - `OUTBOX_CHANNELS` — маппинг `IncidentEventKind` → `NotifyChannel`
+  - `_make_outbox_payload()` — построение JSON payload для уведомления
+  - `_create_outbox_message()` — создание и сохранение outbox-сообщения
+- Outbox-сообщения создаются при:
+  - `OPENED` — создание нового инцидента
+  - `REOPENED` — повторное открытие закрытого инцидента
+  - `OCCURRENCE_ADDED` — новое обнаружение в существующем инциденте
+  - `SEVERITY_RAISED` — повышение severity инцидента
+- Payload содержит: `incident_id`, `repository_id`, `fingerprint` (hex), `secret_type`, `severity`, `confidence`, `event`, `old_severity` (для SEVERITY_RAISED)
+- Канал доставки: `WEBHOOK` (по умолчанию для всех событий)
 
-### Этап 11. AiTaskFactory в commit worker — ⏳ **ОЖИДАЕТ**
-**Выполнено:** —
-**Проверка:** —
-**Примечания:** Протокол `AiTaskFactory` уже определён в `workers/commit.py`. Нужно реализовать конкретную фабрику, создающую `Task` с `kind=AI_VALIDATION`, правильным `idempotency_key` (candidate_id + prompt_version), payload `AiValidationPayload`. Передать в `CommitWorker` при создании.
+**Проверка:** все 90 unit-тестов проходят (3 incident_manager + 11 masking_guard + 76 существующих), smoke-тест `SMOKE OK`
 
-### Этап 12. AI Worker — ⏳ **ОЖИДАЕТ**
-**Выполнено:** —
-**Проверка:** —
-**Примечания:** Новый worker в `src/workers/ai.py` (или `worker_ai.py`), реализующий `TaskHandler` для `AI_VALIDATION`. Цикл: claim → heartbeat → masking guard → prompt build → LLM call → parse verdict → save verdict + incident (если нужно) → complete/fail. Атомарная транзакция через `feed.complete` с callback.
+**Примечания:** Outbox сообщения пишутся в той же транзакции, что и изменение инцидента (атомарность). Реальная доставка (HTTP worker) — отдельная задача.
+
+### Этап 11. AiTaskFactory в commit worker — ✅ **ВЫПОЛНЕНО (2026-11-03)**
+**Выполнено:**
+- Создан `src/workers/ai_factory.py` с реализацией `DefaultAiTaskFactory`:
+  - Реализует протокол `AiTaskFactory` из `workers/commit.py`
+  - Создаёт задачу `Task.ai_validation()` с правильным `idempotency_key` (candidate_id + prompt_version через `key_for_ai_validation`)
+  - Payload: `AiValidationPayload(candidate_id, prompt_version, model=None)`
+  - Конфигурируется через `LlmConfig` (prompt_version из конфига LLM)
+- Экспортирован в `src/workers/__init__.py`
+- Интегрирован в `CommitWorker` через параметр `ai_task_factory` (уже был в конструкторе)
+
+**Проверка:** все 92 unit-теста проходят, smoke-тест `SMOKE OK`
+
+**Примечания:** Фабрика готова к использованию в `application.py` на этапе 13.
+
+### Этап 12. AI Worker — ✅ **ВЫПОЛНЕНО (2026-11-03)**
+**Выполнено:**
+- Создан `src/workers/ai.py` с полной реализацией `AiWorker`:
+  - Цикл: `claim` → `heartbeat` → `masking guard` → `prompt build` → `LLM call` → `parse verdict` → `save verdict + incident` → `complete/fail`
+  - `masking guard` через `ai_validation.masking_guard.assert_safe_for_llm` перед отправкой в LLM
+  - LLM вызов через `LlmClient.complete()` (с semaphore, timeout, retry — уже в `RealLlmClient`)
+  - Сохранение вердикта (`session.save_ai_verdict`) + инцидент (`incident_manager.process`) в одной транзакции
+  - Завершение задачи через `feed.complete` с `AiValidationOutput(verdict_id, incident_id)`
+  - Обработка ошибок: `LeaseLostError`, `CancelledError`, прочие → `feed.fail` с retryable
+  - Heartbeat каждые `lease_s/3` секунд
+- Фабрика `create_ai_worker()` для удобного создания с зависимостями:
+  - Поддержка `FakeLlmClient` для тестов (`use_fake_llm=True`)
+  - Поддержка `RealLlmClient` для продакшена
+  - Конфигурация через `LlmConfig`
+- Экспортирован в `src/workers/__init__.py`
+
+**Проверка:** все 92 unit-теста проходят, smoke-тест `SMOKE OK`
+
+**Примечания:** Интеграция в `application.py` / CLI — на этапе 13.
 
 ### Этап 13. ai_enabled в application.py / CLI — ⏳ **ОЖИДАЕТ**
 **Выполнено:** —

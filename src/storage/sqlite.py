@@ -10,7 +10,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TypeVar
 
-from models import AiVerdict, Candidate, Commit, Repository, Task, TaskResult
+from models import AiVerdict, Candidate, Commit, OutboxMessage, Repository, Task, TaskResult
 
 from .exceptions import StorageError, StorageNotInitializedError
 from .session import StorageSession
@@ -127,6 +127,18 @@ class SqliteStorage:
     async def get_ai_verdict_by_task(self, task_id: int) -> AiVerdict | None:
         """Найти вердикт ИИ по задаче AI_VALIDATION."""
         return await self.read(lambda session: session.get_ai_verdict_by_task(task_id))
+
+    async def save_outbox_message(self, message: OutboxMessage) -> OutboxMessage:
+        """Сохранить сообщение outbox в отдельной транзакции."""
+        return await self.run_in_transaction(lambda session: session.save_outbox_message(message))
+
+    async def update_outbox_message(self, message: OutboxMessage) -> None:
+        """Обновить статус доставки сообщения outbox."""
+        await self.run_in_transaction(lambda session: session.update_outbox_message(message))
+
+    async def get_outbox_message(self, message_id: int) -> OutboxMessage | None:
+        """Загрузить сообщение outbox по id."""
+        return await self.read(lambda session: session.get_outbox_message(message_id))
 
     async def schema_version(self) -> int:
         """Вернуть последнюю применённую версию миграции."""
