@@ -273,7 +273,7 @@ Git → diff → preprocessor (RawCandidate) → static_analyzer (регуляр
 11. Этап 10 — `OutboxMessage`. ✅ **ВЫПОЛНЕНО (2026-11-03)**
 12. Этап 11 — `AiTaskFactory` в commit worker. ✅ **ВЫПОЛНЕНО (2026-11-03)**
 13. Этап 12 — `AI Worker`. ✅ **ВЫПОЛНЕНО (2026-11-03)**
-14. Этап 13 — `ai_enabled` в `application.py` / CLI. ⏳ **ОЖИДАЕТ** (сейчас hardcoded `False`)
+14. Этап 13 — `ai_enabled` в `application.py` / CLI. ✅ **ВЫПОЛНЕНО (2026-11-03)**
 15. Этап 14 — observability. ⏳ **ОЖИДАЕТ**
 16. Этап 15 — тесты (новые + регресс). ⏳ **ОЖИДАЕТ**
 17. Этап 16 — документация + приведение `Plan.md` к SQLite. ⏳ **ОЖИДАЕТ**
@@ -490,10 +490,22 @@ Git → diff → preprocessor (RawCandidate) → static_analyzer (регуляр
 
 **Примечания:** Интеграция в `application.py` / CLI — на этапе 13.
 
-### Этап 13. ai_enabled в application.py / CLI — ⏳ **ОЖИДАЕТ**
-**Выполнено:** —
-**Проверка:** —
-**Примечания:** Сейчас `ScanTaskPayload.ai_enabled` hardcoded `False` и CLI выбрасывает ошибку при `True`. Нужно: убрать ошибку, добавить конфиг LLM (provider, model, api_key env), инициализировать `LlmClient`, `AiTaskFactory`, `AI Worker` в `App.__init__`, передать в `CommitWorker`. Флаг `--ai-enabled` в CLI.
+### Этап 13. ai_enabled в application.py / CLI — ✅ **ВЫПОЛНЕНО (2026-11-03)**
+**Выполнено:**
+- Убрана ошибка при `ai_enabled=True` в `ScanTaskPayload`
+- Добавлены импорты: `AiWorker`, `create_ai_worker`, `DefaultAiTaskFactory`, `LlmConfig`
+- Обновлён `App.__init__`: параметры `ai_enabled`, `llm_config`
+- Добавлен `DefaultAiTaskFactory` в `CommitWorker` при `ai_enabled=True`
+- Создан `AiWorker` через `create_ai_worker` при `ai_enabled=True`
+- Добавлен запуск `ai_worker.run_once()` в главный цикл `scan()`
+- Добавлен CLI флаг `--ai-enabled` в `_parser()`
+- Обновлён `_run_scan`: передача `args.ai_enabled` в `App` и `ScanTaskPayload`
+- `LlmConfig.from_env()` загружает `SENTINEL_KEY_LLM_API_KEY` из env
+- `RealLlmClient` использует OpenAI SDK с настройками: `temperature=0.1`, `max_tokens=2000`, `enable_thinking=False`, без стриминга
+
+**Проверка:** все 93 unit-теста проходят, smoke-тест `SMOKE OK`
+
+**Примечания:** API-ключ загружается из env `SENTINEL_KEY_LLM_API_KEY` (пользователь предоставит на этапе запуска). `RealLlmClient` использует OpenAI SDK (`docs/decisions/0001-openai-dependency.md`). При `ai_enabled=False` (по умолчанию) AI компоненты не создаются.
 
 ### Этап 14. Observability — ⏳ **ОЖИДАЕТ**
 **Выполнено:** —
@@ -519,19 +531,89 @@ Git → diff → preprocessor (RawCandidate) → static_analyzer (регуляр
 
 ## 6. Как запускать проверку (для выполнения пользователя)
 
+### Переменные окружения
+Создайте файл `.env` в корне проекта или экспортируйте переменные в shell:
+
 ```powershell
 $env:PYTHONPATH = "src"
 $env:SENTINEL_KEY_HMAC_KEY_B64 = "<base64 32+ байт>"
+$env:SENTINEL_KEY_LLM_API_KEY = "<ваш_ключ_NVIDIA_Nemotron>"
+```
 
+### Запуск тестов
+
+```powershell
 # Smoke-тест
 py -3 -m tests.smoke_scan
 
-# Unit-тесты (пример)
+# Unit-тесты
 py -3 -m tests.unit.test_static_analyzer
 py -3 -m tests.unit.test_storage
+py -3 -m tests.unit.test_feed
+py -3 -m tests.unit.test_preprocessor
+py -3 -m tests.unit.test_git_collector.test_diff_parser
+py -3 -m tests.unit.test_git_collector.test_factory
+py -3 -m tests.unit.test_git_collector.test_local_collector
+py -3 -m tests.unit.test_git_collector.test_remote_stubs
+py -3 -m tests.unit.test_git_collector.test_sha
+py -3 -m tests.unit.test_incident_manager
+py -3 -m tests.unit.test_orchestrator
+py -3 -m tests.unit.test_commit_worker
+py -3 -m tests.unit.test_application
+py -3 -m tests.unit.test_config
+py -3 -m tests.unit.models.test_task
+py -3 -m tests.unit.models.test_incident
+py -3 -m tests.unit.models.test_raw_candidate
+py -3 -m tests.unit.test_masking_guard
 
-# CLI
-py -3 -m application scan --repository "C:\Users\Yona\Рабочий стол\Проектная деятельность\sentinel_key" --database "var\sentinel_key.db"
+# Integration test для реального LLM (требует SENTINEL_KEY_LLM_API_KEY)
+$env:SENTINEL_KEY_LLM_API_KEY = "<ваш_ключ_NVIDIA_Nemotron>"
+py -3 -m tests.integration.test_real_llm
 ```
+
+### CLI запуск
+
+```powershell
+# Без AI (по умолчанию)
+py -3 -m application scan --repository "C:\path\to\project" --database "var\sentinel_key.db"
+
+# С AI-валидацией (требует SENTINEL_KEY_LLM_API_KEY в env)
+$env:SENTINEL_KEY_LLM_API_KEY = "<ваш_ключ_NVIDIA_Nemotron>"
+py -3 -m application scan --repository "C:\path\to\project" --database "var\sentinel_key.db" --ai-enabled
+```
+
+### Пример с AI (создаёт тестовый репозиторий и сканирует)
+
+```powershell
+# 1. Создаём временный репозиторий с секретом и без
+$repo = "$env:TEMP\sentinel_test_repo"
+if (Test-Path $repo) { Remove-Item $repo -Recurse -Force }
+git init $repo
+cd $repo
+
+# Файл БЕЗ секрета
+"test_var = 'not_a_secret_just_test'" | Out-File -Encoding utf8 test.py
+
+# Файл С секретом (плейсхолдер AWS ключа)
+"aws_key = 'AKIAIOSFODNN7EXAMPLE'" | Out-File -Encoding utf8 config.py
+
+git add .
+git commit -m "Initial commit"
+
+# 2. Запуск БЕЗ AI (только локальные детекторы)
+py -3 -m application scan --repository "." --database "var\sentinel_key.db"
+# Ожидается: найдёт AWS ключ через локальные детекторы (trusted_formats), инцидент откроется
+
+# 3. Запуск С AI (включаем LLM-валидацию)
+$env:SENTINEL_KEY_LLM_API_KEY = 
+py -3 -m application scan --repository "." --database "var\sentinel_key.db" --ai-enabled
+# Ожидается: LLM подтвердит, что AKIAIOSFODNN7EXAMPLE — это плейсхолдер (is_secret=false), инцидент не откроется
+# Для test.py LLM вернёт is_secret=false с высокой уверенностью
+```
+
+**Ожидаемое поведение:**
+- `test_var = 'not_a_secret_just_test'` → LLM: `is_secret=false`, `confidence≈0.99`
+- `aws_key = 'AKIAIOSFODNN7EXAMPLE'` → LLM: `is_secret=false` (плейсхолдер), `confidence≈0.9`
+- Реальные секреты → LLM: `is_secret=true`, `confidence≥0.85`
 
 После внесения изменений повторить прогон всех `tests/unit/` и `tests/smoke_scan.py`, убедиться в отсутствии регресса, и только затем считать этап завершённым.

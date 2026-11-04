@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import openai
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -29,19 +30,19 @@ class LlmConfig:
     """
 
     # Эндпоинт API (OpenAI-совместимый). Для NVIDIA Nemotron будет задан на этапе 13.
-    api_endpoint: str = "https://integrate.api.nvidia.com/v1/chat/completions"
+    api_endpoint: str = "https://integrate.api.nvidia.com/v1"
 
-    # Имя модели. Для NVIDIA Nemotron 3 Ultra: "nvidia/nemotron-3-ultra"
-    model: str = "nvidia/nemotron-3-ultra"
+    # Имя модели. Для NVIDIA Nemotron 3 Ultra: "nvidia/nemotron-3-ultra-550b-a55b"
+    model: str = "nvidia/nemotron-3-ultra-550b-a55b"
 
     # API-ключ. Читается из env SENTINEL_KEY_LLM_API_KEY на этапе 13.
     api_key: str | None = None
 
     # Температура ~0 для детерминированных ответов
-    temperature: float = 0.0
+    temperature: float = 0.1
 
     # Максимальное количество токенов в ответе
-    max_tokens: int = 512
+    max_tokens: int = 4000
 
     # Таймаут запроса (секунды)
     timeout_s: float = 30.0
@@ -363,8 +364,12 @@ def parse_llm_response(response_text: str, candidate_id: int, task_id: int, mode
 # Реальный HTTP-клиент для NVIDIA Nemotron 3 Ultra (OpenAI-совместимый API)
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Реальный клиент через OpenAI SDK
+# ---------------------------------------------------------------------------
+
 class RealLlmClient:
-    """Реальный HTTP-клиент для NVIDIA Nemotron 3 Ultra (OpenAI-совместимый API).
+    """Реальный клиент для NVIDIA Nemotron 3 Ultra через OpenAI SDK.
 
     Поддерживает:
     - Semaphore для backpressure (лимит параллельных вызовов)
@@ -376,150 +381,106 @@ class RealLlmClient:
     def __init__(self, config: LlmConfig | None = None) -> None:
         self._config = config or LlmConfig()
         self._semaphore = asyncio.Semaphore(self._config.max_concurrent)
+        self._client: openai.AsyncOpenAI | None = None
 
-    async def complete(
-        self,
-        candidate: Candidate,
-        payload: AiValidationPayload,
-    ) -> AiVerdict:
-        """Вызвать LLM с ретраями, таймаутом и семафором.
+    def _get_client(self) -> openai.AsyncOpenAI:
+        if self._client is None:
+            self._client = openai.AsyncOpenAI(
+                base_url=self._config.api_endpoint,
+                api_key=self._config.api_key,
+                timeout=self._config.timeout_s,
+                max_retries=0,
+            )
+        return self._client
 
-        Args:
-            candidate: Кандидат с маскированными данными.
-            payload: Параметры задачи (candidate_id, prompt_version, model override).
-
-        Returns:
-            Валидированный AiVerdict.
-
-        Raises:
-            LlmTimeoutError: превышен таймаут.
-            LlmNetworkError: сетевая ошибка.
-            LlmInvalidResponseError: невалидный ответ LLM.
-            LlmAuthError: ошибка аутентификации (401/403).
-            LlmRateLimitError: превышен rate limit (429).
-        """
+    async def complete(self, candidate, payload) -> AiVerdict:
         if self._config.api_key is None:
-            raise LlmAuthError("API key not configured. Set SENTINEL_KEY_LLM_API_KEY.")
-
+            raise LlmAuthError('API key not configured. Set SENTINEL_KEY_LLM_API_KEY.')
         system_prompt, user_prompt = build_prompt(candidate)
         model = payload.model or self._config.model
-
-        # Подготовка запроса к OpenAI-совместимому API
-        request_body = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            "temperature": self._config.temperature,
-            "max_tokens": self._config.max_tokens,
-        }
-        data = json.dumps(request_body).encode("utf-8")
-
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self._config.api_key}",
-        }
-
-        last_exception: LlmError | None = None
-
+        last_exception = None
         for attempt in range(1, self._config.max_attempts + 1):
             try:
                 async with self._semaphore:
-                    verdict = await self._call_with_timeout(data, headers, payload.prompt_version)
+                    verdict = await self._call_with_timeout(candidate, payload)
                     return verdict
-
             except LlmTimeoutError:
-                last_exception = LlmTimeoutError(f"Attempt {attempt}/{self._config.max_attempts} timed out")
+                last_exception = LlmTimeoutError(f'Attempt {attempt}/{self._config.max_attempts} timed out')
             except LlmRateLimitError:
-                last_exception = LlmRateLimitError(f"Attempt {attempt}/{self._config.max_attempts} rate limited")
+                last_exception = LlmRateLimitError(f'Attempt {attempt}/{self._config.max_attempts} rate limited')
             except LlmAuthError:
-                # Auth errors are not retryable
                 raise
             except LlmNetworkError as e:
                 last_exception = e
             except LlmInvalidResponseError as e:
                 last_exception = e
-
-            # Если это не последняя попытка — ждём с экспоненциальным backoff + jitter
             if attempt < self._config.max_attempts:
                 wait_time = self._config.retry_base_s * (2 ** (attempt - 1))
-                jitter = random.uniform(0, wait_time * 0.1)  # ±10% jitter
+                jitter = __import__('random').uniform(0, wait_time * 0.1)
+                import asyncio
                 await asyncio.sleep(wait_time + jitter)
-
-        # Все попытки исчерпаны
         if last_exception:
             raise last_exception
-        raise LlmNetworkError("All attempts failed without a specific error")
+        raise LlmNetworkError('All attempts failed')
 
-    async def _call_with_timeout(
-        self,
-        data: bytes,
-        headers: dict[str, str],
-        prompt_version: int,
-    ) -> AiVerdict:
-        """Выполнить HTTP-запрос с таймаутом и парсингом ответа."""
-        request = urllib.request.Request(
-            self._config.api_endpoint,
-            data=data,
-            headers=headers,
-            method="POST",
-        )
-
+    async def _call_with_timeout(self, candidate, payload):
+        system_prompt, user_prompt = build_prompt(candidate)
+        model = payload.model or self._config.model
+        client = self._get_client()
         try:
-            # asyncio.wait_for для таймаута
-            response = await asyncio.wait_for(
-                asyncio.to_thread(self._do_request, request),
+            completion = await asyncio.wait_for(
+                client.chat.completions.create(
+                    model=model,
+                    messages=[{'role': 'system', 'content': system_prompt}, {'role': 'user', 'content': user_prompt}],
+                    temperature=self._config.temperature,
+                    max_tokens=self._config.max_tokens,
+                ),
                 timeout=self._config.timeout_s,
             )
         except asyncio.TimeoutError as e:
-            raise LlmTimeoutError(f"Request timed out after {self._config.timeout_s}s") from e
-        except urllib.error.HTTPError as e:
-            self._handle_http_error(e)
-        except urllib.error.URLError as e:
-            raise LlmNetworkError(f"Network error: {e.reason}") from e
-
-        # Парсинг ответа
+            raise LlmTimeoutError(f'Request timed out after {self._config.timeout_s}s') from e
+        except __import__('openai').AuthenticationError as e:
+            raise LlmAuthError(f'Authentication failed: {e}') from e
+        except __import__('openai').RateLimitError as e:
+            raise LlmRateLimitError(f'Rate limit exceeded: {e}') from e
+        except __import__('openai').APIConnectionError as e:
+            raise LlmNetworkError(f'Network error: {e}') from e
+        except __import__('openai').APITimeoutError as e:
+            raise LlmTimeoutError(f'Request timed out: {e}') from e
+        except __import__('openai').APIStatusError as e:
+            if e.status_code in (401, 403):
+                raise LlmAuthError(f'Authentication failed: {e.status_code}') from e
+            if e.status_code == 429:
+                raise LlmRateLimitError(f'Rate limit exceeded: {e.status_code}') from e
+            if 500 <= e.status_code < 600:
+                raise LlmNetworkError(f'Server error: {e.status_code}') from e
+            raise LlmNetworkError(f'API error: {e.status_code}') from e
+        except __import__('openai').APIError as e:
+            raise LlmNetworkError(f'API error: {e}') from e
+        
         try:
-            response_data = json.loads(response.decode("utf-8"))
-        except json.JSONDecodeError as e:
-            raise LlmInvalidResponseError(f"Invalid JSON response: {e}") from e
+            content = completion.choices[0].message.content
+            # If content is None, try reasoning_content (Nemotron specific)
+            if content is None:
+                content = getattr(completion.choices[0].message, 'reasoning_content', None)
+        except (KeyError, IndexError, TypeError, AttributeError) as e:
+            raise LlmInvalidResponseError(f'Unexpected response structure: {e}') from e
+        return parse_llm_response(content, candidate_id=0, task_id=0, model=self._config.model, prompt_version=payload.prompt_version)
 
-        # Извлечение контента из OpenAI-совместимого ответа
-        try:
-            content = response_data["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError) as e:
-            raise LlmInvalidResponseError(f"Unexpected response structure: {e}") from e
-
-        # Парсинг и валидация вердикта
-        return parse_llm_response(
-            content,
-            candidate_id=0,  # будет перезаписан в AI Worker
-            task_id=0,       # будет перезаписан в AI Worker
-            model=self._config.model,
-            prompt_version=prompt_version,
-        )
-
-    def _do_request(self, request: urllib.request.Request) -> bytes:
-        """Синхронный HTTP-запрос (выполняется в thread pool)."""
-        with urllib.request.urlopen(request) as response:
-            return response.read()
-
-    @staticmethod
-    def _handle_http_error(error: urllib.error.HTTPError) -> None:
-        """Преобразовать HTTP-ошибку в LlmError."""
-        if error.code == 401 or error.code == 403:
-            raise LlmAuthError(f"Authentication failed: {error.code}")
-        if error.code == 429:
-            raise LlmRateLimitError(f"Rate limit exceeded: {error.code}")
-        if 500 <= error.code < 600:
-            raise LlmNetworkError(f"Server error: {error.code}")
-        raise LlmNetworkError(f"HTTP error: {error.code}")
+    def _get_client(self):
+        if self._client is None:
+            self._client = openai.AsyncOpenAI(
+                base_url=self._config.api_endpoint,
+                api_key=self._config.api_key,
+                timeout=self._config.timeout_s,
+                max_retries=0,
+            )
+        return self._client
 
     @property
-    def prompt_version(self) -> int:
+    def prompt_version(self):
         return self._config.prompt_version
 
     @property
-    def max_concurrent(self) -> int:
+    def max_concurrent(self):
         return self._config.max_concurrent
