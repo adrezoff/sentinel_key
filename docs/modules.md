@@ -51,7 +51,7 @@ flowchart LR
 **Как устроен.**
 - Один файл — одна модель внутри подпакета; enum, принадлежащий только этой модели, лежит в её файле.
 - В моделях живёт только **поведение, зависящее от самой модели**: проверка переходов (`Task.transition`, `Incident.set_status`), расчёт `ScoreBreakdown.total`, `Task.schedule_retry`. Ни SQL, ни сети, ни чтения конфигурации.
-- `TaskKind.AI_VALIDATION` зарезервирован (значение 3). Классы `AiVerdict`, `AiValidationPayload`, `AiValidationOutput` и регистрация kind — зона ответственности трека `ai_validation` (пока отсутствуют).
+- `TaskKind.AI_VALIDATION` зарезервирован (значение 3). Классы `AiVerdict`, `AiValidationPayload`, `AiValidationOutput` и регистрация kind — реализованы в модуле `ai_validation` (этап 4 плана).
 - Любое изменение полей начинается с `docs/models.md`.
 
 ---
@@ -335,9 +335,8 @@ still_in_head=None)` выполняется синхронно внутри `Sto
 Схема создаётся версионируемыми SQL-миграциями из `storage/migrations/`.
 `SqliteStorage.initialize()` применяет ещё не выполненные миграции, включает
 `foreign_keys`, `busy_timeout` и WAL для файловой БД. Слой предоставляет
-преобразование всех уже реализованных сохраняемых моделей; таблица
-`ai_verdicts` создаётся миграцией, а типизированный mapper будет добавлен вместе
-с доменной моделью `AiVerdict` в треке `ai_validation`.
+преобразование всех уже реализованных сохраняемых моделей, включая
+`AiVerdict` (мапперы `save_ai_verdict`, `get_ai_verdict`, `get_ai_verdict_by_candidate`, `get_ai_verdict_by_task` в `StorageSession` и публичные async-методы в `SqliteStorage`).
 
 ---
 
@@ -348,10 +347,10 @@ still_in_head=None)` выполняется синхронно внутри `Sto
 `IncidentManager`. При вызове `scan(...)` регистрирует локальный репозиторий,
 создаёт новый корневой запуск или возобновляет активный, планирует и выполняет
 задачи до итогового `TaskResult`. Перед циклом перевыдаёт задачи с истёкшей
-арендой. HMAC-ключ передаётся явно и не сохраняется; `ai_enabled=false` обязателен
-в MVP. CLI `python -m application scan` читает ключ из environment и выводит
-только id запуска, outcome и агрегированные счётчики. Пауза между проверками
-пустой ленты задаётся `poll_interval_s` (по умолчанию 0.25 с).
+арендой. HMAC-ключ передаётся явно и не сохраняется. CLI `python -m application scan`
+читает ключ из environment и выводит только id запуска, outcome и агрегированные
+счётчики. Поддерживает флаг `--ai-enabled` для включения AI-валидации.
+Пауза между проверками пустой ленты задаётся `poll_interval_s` (по умолчанию 0.25 с).
 
 ## 13. `observability/` — логи и метрики
 

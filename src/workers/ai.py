@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Protocol
 
 from ai_validation.llm_client import (
@@ -128,7 +128,7 @@ class AiWorker:
         verdict = await self.llm_client.complete(candidate, payload)
 
         # 3. Сохранение вердикта + инцидент (в одной транзакции)
-        await self.storage.run_in_transaction(
+        incident_id = await self.storage.run_in_transaction(
             lambda session: self._persist_verdict_and_incident(
                 session, task, candidate, verdict, payload.prompt_version
             )
@@ -142,7 +142,7 @@ class AiWorker:
                 outcome=Outcome.OK,
                 output=AiValidationOutput(
                     verdict_id=verdict.id,
-                    incident_id=None,  # будет заполнен в _persist_verdict_and_incident
+                    incident_id=incident_id,
                 ),
             ),
             lambda session: None,  # уже сохранено в транзакции выше
@@ -161,8 +161,8 @@ class AiWorker:
         Returns:
             incident_id если инцидент создан/обновлен, иначе None.
         """
-        # Сохраняем вердикт
-        verdict.task_id = task.id
+        # Сохраняем вердикт (AiVerdict заморожен — создаём копию с task_id)
+        verdict = replace(verdict, task_id=task.id)
         saved_verdict = session.save_ai_verdict(verdict)
 
         # Обрабатываем инцидент через менеджер

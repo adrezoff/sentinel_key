@@ -62,17 +62,18 @@ class LlmConfig:
     @classmethod
     def from_env(cls) -> "LlmConfig":
         """Создать конфиг из переменных окружения (для этапа 13)."""
+        _defaults = cls()
         return cls(
-            api_endpoint=os.getenv("SENTINEL_KEY_LLM_ENDPOINT", cls.api_endpoint),
-            model=os.getenv("SENTINEL_KEY_LLM_MODEL", cls.model),
-            api_key=os.getenv("SENTINEL_KEY_LLM_API_KEY"),
-            temperature=float(os.getenv("SENTINEL_KEY_LLM_TEMPERATURE", str(cls.temperature))),
-            max_tokens=int(os.getenv("SENTINEL_KEY_LLM_MAX_TOKENS", str(cls.max_tokens))),
-            timeout_s=float(os.getenv("SENTINEL_KEY_LLM_TIMEOUT", str(cls.timeout_s))),
-            max_attempts=int(os.getenv("SENTINEL_KEY_LLM_MAX_ATTEMPTS", str(cls.max_attempts))),
-            retry_base_s=float(os.getenv("SENTINEL_KEY_LLM_RETRY_BASE", str(cls.retry_base_s))),
-            max_concurrent=int(os.getenv("SENTINEL_KEY_LLM_MAX_CONCURRENT", str(cls.max_concurrent))),
-            prompt_version=int(os.getenv("SENTINEL_KEY_LLM_PROMPT_VERSION", str(cls.prompt_version))),
+            api_endpoint=os.getenv("SENTINEL_KEY_LLM_ENDPOINT", _defaults.api_endpoint),
+            model=os.getenv("SENTINEL_KEY_LLM_MODEL", _defaults.model),
+            api_key=os.getenv("SENTINEL_KEY_LLM_API_KEY") or None,
+            temperature=float(os.getenv("SENTINEL_KEY_LLM_TEMPERATURE", str(_defaults.temperature))),
+            max_tokens=int(os.getenv("SENTINEL_KEY_LLM_MAX_TOKENS", str(_defaults.max_tokens))),
+            timeout_s=float(os.getenv("SENTINEL_KEY_LLM_TIMEOUT", str(_defaults.timeout_s))),
+            max_attempts=int(os.getenv("SENTINEL_KEY_LLM_MAX_ATTEMPTS", str(_defaults.max_attempts))),
+            retry_base_s=float(os.getenv("SENTINEL_KEY_LLM_RETRY_BASE", str(_defaults.retry_base_s))),
+            max_concurrent=int(os.getenv("SENTINEL_KEY_LLM_MAX_CONCURRENT", str(_defaults.max_concurrent))),
+            prompt_version=int(os.getenv("SENTINEL_KEY_LLM_PROMPT_VERSION", str(_defaults.prompt_version))),
         )
 # ---------------------------------------------------------------------------
 # Протокол LLM-клиента

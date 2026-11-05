@@ -69,7 +69,7 @@ class App:
                 feed=self.feed,
                 storage=self.storage,
                 incident_manager=IncidentManager(),
-                llm_config=LlmConfig() if None else None,
+                llm_config=LlmConfig(),
                 use_fake_llm=False,
             )
         self.poll_interval_s = poll_interval_s
