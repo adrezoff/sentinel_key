@@ -12,52 +12,45 @@ import re
 from dataclasses import dataclass
 
 from models.candidate import Candidate
+from security.redaction import (
+    API_KEY_PATTERN as _API_KEY_PATTERN,
+    AWS_ACCESS_KEY_PATTERN as _AWS_ACCESS_KEY_PATTERN,
+    AWS_SECRET_KEY_PATTERN as _AWS_SECRET_KEY_PATTERN,
+    BEARER_TOKEN_PATTERN as _BEARER_TOKEN_PATTERN,
+    DB_URL_WITH_PASSWORD_PATTERN as _DB_URL_WITH_PASSWORD_PATTERN,
+    GITHUB_TOKEN_PATTERN as _GITHUB_TOKEN_PATTERN,
+    JWT_PATTERN as _JWT_PATTERN,
+    PASSWORD_PATTERN as _PASSWORD_PATTERN,
+    PRIVATE_KEY_PATTERN as _PRIVATE_KEY_PATTERN,
+    SLACK_TOKEN_PATTERN as _SLACK_TOKEN_PATTERN,
+    VALUE_FINGERPRINT_PATTERN as _VALUE_FINGERPRINT_PATTERN,
+    is_hex_only_aws_secret,
+)
 
 
 class MaskingViolationError(ValueError):
     """Нарушение маскирования: в строке обнаружен потенциальный сырой секрет."""
 
-    def __init__(self, message: str, *, pattern_name: str | None = None, matched: str | None = None) -> None:
+    def __init__(self, message: str, *, pattern_name: str | None = None) -> None:
         super().__init__(message)
         self.pattern_name = pattern_name
-        self.matched = matched
 
 
 # ---------------------------------------------------------------------------
 # Паттерны сырых секретов (компилируются один раз)
 # ---------------------------------------------------------------------------
 
-# AWS Access Key ID: AKIA... или ASIA... (20 символов)
-AWS_ACCESS_KEY_PATTERN = re.compile(r"\b(AKIA|ASIA)[A-Z0-9]{16}\b")
-
-# AWS Secret Access Key: 40 символов base64-совместимых
-AWS_SECRET_KEY_PATTERN = re.compile(r"\b[A-Za-z0-9/+=]{40}\b")
-
-# GitHub Personal Access Token: ghp_... или github_pat_...
-GITHUB_TOKEN_PATTERN = re.compile(r"\b(ghp|github_pat)_[A-Za-z0-9_]{36,}\b")
-
-# Slack Token: xox[baprs]...
-SLACK_TOKEN_PATTERN = re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b")
-
-# JWT: три base64url части через точку
-JWT_PATTERN = re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b")
-
-# Private Key: -----BEGIN ... PRIVATE KEY-----
-PRIVATE_KEY_PATTERN = re.compile(r"-----BEGIN\s+[A-Z\s]+PRIVATE KEY-----")
-
-# Bearer Token: Authorization: Bearer <token>
-BEARER_TOKEN_PATTERN = re.compile(r"\bBearer\s+[A-Za-z0-9._-]{20,}\b", re.IGNORECASE)
-
-# Database URL с паролем: postgresql://user:pass@...
-DB_URL_WITH_PASSWORD_PATTERN = re.compile(
-    r"\b(postgresql|mysql|mongodb|redis)://[^:]+:[^@\s]+@[^\s]+\b"
-)
-
-# Generic API Key: api_key=... или apikey=...
-API_KEY_PATTERN = re.compile(r"\b(api[_-]?key|apikey)\s*[:=]\s*[A-Za-z0-9_-]{20,}\b", re.IGNORECASE)
-
-# Generic Password: password=... или pwd=...
-PASSWORD_PATTERN = re.compile(r"\b(password|pwd|pass)\s*[:=]\s*\S{8,}\b", re.IGNORECASE)
+AWS_ACCESS_KEY_PATTERN = _AWS_ACCESS_KEY_PATTERN.pattern
+AWS_SECRET_KEY_PATTERN = _AWS_SECRET_KEY_PATTERN.pattern
+GITHUB_TOKEN_PATTERN = _GITHUB_TOKEN_PATTERN.pattern
+SLACK_TOKEN_PATTERN = _SLACK_TOKEN_PATTERN.pattern
+JWT_PATTERN = _JWT_PATTERN.pattern
+PRIVATE_KEY_PATTERN = _PRIVATE_KEY_PATTERN.pattern
+BEARER_TOKEN_PATTERN = _BEARER_TOKEN_PATTERN.pattern
+DB_URL_WITH_PASSWORD_PATTERN = _DB_URL_WITH_PASSWORD_PATTERN.pattern
+API_KEY_PATTERN = _API_KEY_PATTERN.pattern
+PASSWORD_PATTERN = _PASSWORD_PATTERN.pattern
+VALUE_FINGERPRINT_PATTERN = _VALUE_FINGERPRINT_PATTERN.pattern
 
 # Сводный список паттернов для проверки
 RAW_SECRET_PATTERNS: list[tuple[str, re.Pattern]] = [
@@ -94,24 +87,22 @@ def check_masking(text: str) -> MaskingGuardResult:
     violations: list[MaskingViolationError] = []
 
     # 1. Проверка value_fingerprint (hex-строка 64 символа = 32 байта)
-    fingerprint_matches = re.findall(r"\b[a-fA-F0-9]{64}\b", text)
+    fingerprint_matches = VALUE_FINGERPRINT_PATTERN.findall(text)
     for fp in fingerprint_matches:
         violations.append(MaskingViolationError(
-            f"Detected potential value_fingerprint (64 hex chars): {fp[:16]}...",
+            "Detected potential value_fingerprint (64 hex chars)",
             pattern_name="VALUE_FINGERPRINT",
-            matched=fp,
         ))
 
     # 2. Проверка известных паттернов сырых секретов
     for name, pattern in RAW_SECRET_PATTERNS:
-        matches = pattern.findall(text)
-        for match in matches:
-            # Маскируем совпадение в логе
-            masked = match[:8] + "..." + match[-4:] if len(match) > 12 else "***"
+        for match in pattern.findall(text):
+            # Hex-only значения не являются AWS Secret Access Key: так часто выглядят SHA-1.
+            if name == "AWS_SECRET_KEY" and is_hex_only_aws_secret(match):
+                continue
             violations.append(MaskingViolationError(
-                f"Detected raw secret pattern '{name}': {masked}",
+                f"Detected raw secret pattern '{name}'",
                 pattern_name=name,
-                matched=match,
             ))
 
     return MaskingGuardResult(ok=len(violations) == 0, violations=violations)
@@ -130,9 +121,11 @@ def assert_safe_for_llm(text: str) -> None:
     """
     result = check_masking(text)
     if not result.ok:
-        # Объединяем все нарушения в одно сообщение
-        details = "; ".join(f"{v.pattern_name}: {v.matched[:16]}..." for v in result.violations)
-        raise MaskingViolationError(f"Masking violations detected: {details}")
+        names = ", ".join(
+            violation.pattern_name or "UNKNOWN"
+            for violation in result.violations
+        )
+        raise MaskingViolationError(f"Masking violations detected: {names}")
 
 
 def check_candidate_masking(candidate: Candidate) -> MaskingGuardResult:

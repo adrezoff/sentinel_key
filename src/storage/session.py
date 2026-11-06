@@ -509,7 +509,12 @@ class StorageSession:
         return None if row is None else self._candidate_from_row(row)
 
     def save_ai_verdict(self, verdict: AiVerdict) -> AiVerdict:
-        """Идемпотентно сохранить вердикт ИИ (UNIQUE на task_id)."""
+        """Идемпотентно сохранить вердикт ИИ (UNIQUE на task_id).
+
+        ``AiVerdict`` — frozen-модель, поэтому сохранённый экземпляр с
+        присвоенным ``id`` возвращается из метода, а входной объект не
+        мутируется.
+        """
         self._connection.execute(
             """
             INSERT INTO ai_verdicts(
@@ -536,9 +541,7 @@ class StorageSession:
             "SELECT * FROM ai_verdicts WHERE task_id = ?", (verdict.task_id,)
         ).fetchone()
         assert row is not None
-        stored = self._ai_verdict_from_row(row)
-        verdict.id = stored.id
-        return stored
+        return self._ai_verdict_from_row(row)
 
     def get_ai_verdict(self, verdict_id: int) -> AiVerdict | None:
         """Загрузить вердикт ИИ по первичному ключу."""

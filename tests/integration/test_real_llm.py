@@ -12,12 +12,7 @@ _SRC = Path(__file__).resolve().parents[2] / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-# Load .env for local testing
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
+import pytest
 
 from ai_validation.llm_client import RealLlmClient, LlmConfig
 from models.ai_validation.ai_validation_payload import AiValidationPayload
@@ -28,9 +23,13 @@ from models.enums import SecretType, DetectorFlags
 class RealLlmClientTest(unittest.IsolatedAsyncioTestCase):
     """Test real LLM client with NVIDIA Nemotron (minimal tokens)."""
 
+    pytestmark = pytest.mark.real_llm
+
     @classmethod
     def setUpClass(cls) -> None:
-        """Check API key is available."""
+        """Check API key is available and real-LLM tests were explicitly enabled."""
+        if os.getenv("SENTINEL_KEY_RUN_REAL_LLM") != "1":
+            raise unittest.SkipTest("set SENTINEL_KEY_RUN_REAL_LLM=1 to enable real LLM tests")
         cls.api_key = os.getenv("SENTINEL_KEY_LLM_API_KEY")
         if not cls.api_key:
             raise unittest.SkipTest("SENTINEL_KEY_LLM_API_KEY not set in environment")

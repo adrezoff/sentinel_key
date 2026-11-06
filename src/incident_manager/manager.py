@@ -120,6 +120,7 @@ class IncidentManager:
         verdict: AiVerdict | None = None,
         still_in_head: bool | None = None,
         now: datetime | None = None,
+        ai_task_id: int | None = None,
     ) -> Incident | None:
         """Создать или дополнить инцидент для нового кандидата в транзакции вызывающего кода.
 
@@ -177,6 +178,7 @@ class IncidentManager:
                 recommendation=recommendation,
                 first_commit_id=candidate.commit_id,
                 still_in_head=still_in_head,
+                last_verdict_id=verdict.id if verdict is not None else None,
                 created_at=when,
                 updated_at=when,
             )
@@ -193,7 +195,7 @@ class IncidentManager:
             )
             _create_outbox_message(session, incident, IncidentEventKind.OPENED)
             previous_version = incident.version
-            occurrence = incident.add_occurrence(candidate, ai_task_id=None, now=when)
+            occurrence = incident.add_occurrence(candidate, ai_task_id=ai_task_id, now=when)
             session.save_occurrence(occurrence)
             target_severity = self.policy.bump_severity(severity, still_in_head=still_in_head)
             if target_severity > incident.severity:
@@ -219,7 +221,7 @@ class IncidentManager:
                 incident.set_status(IncidentStatus.OPEN, "system", "Secret detected again", now=when)
             )
             _create_outbox_message(session, incident, IncidentEventKind.REOPENED)
-        occurrence = incident.add_occurrence(candidate, ai_task_id=None, now=when)
+        occurrence = incident.add_occurrence(candidate, ai_task_id=ai_task_id, now=when)
         session.save_occurrence(occurrence)
         session.save_incident_event(
             IncidentEvent(
@@ -233,6 +235,7 @@ class IncidentManager:
         # При обновлении: используем AI-вердикт если есть, иначе локальную политику
         old_severity = incident.severity
         if verdict is not None and verdict.is_secret:
+            incident.last_verdict_id = verdict.id
             target_severity = self.policy.bump_severity(verdict.severity, still_in_head=still_in_head)
             if target_severity > incident.severity:
                 session.save_incident_event(incident.raise_severity(target_severity, now=when))

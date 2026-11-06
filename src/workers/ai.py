@@ -4,8 +4,8 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, replace
-from typing import Protocol
+from dataclasses import replace
+from typing import Callable
 
 from ai_validation.llm_client import (
     LlmClient,
@@ -20,7 +20,10 @@ from ai_validation.llm_client import (
     RealLlmClient,
     build_prompt,
 )
-from ai_validation.masking_guard import assert_safe_for_llm as masking_assert_safe
+from ai_validation.masking_guard import (
+    assert_safe_for_llm as masking_assert_safe,
+    MaskingViolationError,
+)
 from feed import Feed, LeaseLostError
 from incident_manager import IncidentManager
 from models import (
@@ -81,11 +84,36 @@ class AiWorker:
             pass
         except asyncio.CancelledError:
             raise
-        except Exception as e:
+        except MaskingViolationError as e:
+            # Masking violation — не retryable, сохраняем безопасное сообщение
             try:
                 await self.feed.fail(
                     task,
-                    TaskError(ErrorCode.INTERNAL, f"ai validation failed: {e}", retryable=True),
+                    TaskError(
+                        ErrorCode.MASKING_VIOLATION,
+                        f"masking violation: {e.pattern_name or 'UNKNOWN'}",
+                        retryable=False,
+                    ),
+                )
+            except LeaseLostError:
+                pass
+        except LlmError as e:
+            # LLM ошибки — маппим на соответствующие ErrorCode
+            error_code = self._map_llm_error(e)
+            retryable = e.retryable
+            try:
+                await self.feed.fail(
+                    task,
+                    TaskError(error_code, f"llm error: {e.code or 'UNKNOWN'}", retryable=retryable),
+                )
+            except LeaseLostError:
+                pass
+        except Exception as e:
+            # Остальные ошибки — INTERNAL, retryable
+            try:
+                await self.feed.fail(
+                    task,
+                    TaskError(ErrorCode.INTERNAL, f"ai validation failed: {type(e).__name__}", retryable=True),
                 )
             except LeaseLostError:
                 pass
@@ -96,6 +124,20 @@ class AiWorker:
             except asyncio.CancelledError:
                 pass
         return True
+
+    def _map_llm_error(self, e: LlmError) -> ErrorCode:
+        """Маппинг LLM исключений на ErrorCode."""
+        if isinstance(e, LlmTimeoutError):
+            return ErrorCode.LLM_FAILED
+        if isinstance(e, LlmInvalidResponseError):
+            return ErrorCode.LLM_INVALID_RESPONSE
+        if isinstance(e, LlmRateLimitError):
+            return ErrorCode.LLM_FAILED
+        if isinstance(e, LlmAuthError):
+            return ErrorCode.LLM_FAILED
+        if isinstance(e, LlmNetworkError):
+            return ErrorCode.LLM_FAILED
+        return ErrorCode.LLM_FAILED
 
     async def _heartbeat(self, task_id: int) -> None:
         """Обновлять аренду задачи пока она выполняется."""
@@ -127,50 +169,27 @@ class AiWorker:
         # 2. Вызов LLM с ретраями (внутри llm_client уже есть retry логика)
         verdict = await self.llm_client.complete(candidate, payload)
 
-        # 3. Сохранение вердикта + инцидент (в одной транзакции)
-        incident_id = await self.storage.run_in_transaction(
-            lambda session: self._persist_verdict_and_incident(
-                session, task, candidate, verdict, payload.prompt_version
-            )
-        )
+        # 3. Подготовить verdict с правильным task_id и candidate_id (AiVerdict frozen — replace)
+        verdict = replace(verdict, task_id=task.id, candidate_id=payload.candidate_id)
 
-        # 4. Завершение задачи успешно
-        await self.feed.complete(
-            task,
-            TaskResult(
+        # 4. Атомарное завершение через storage.ai_validation_done
+        # incident_changes: вызывает incident_manager.process
+        # result_factory: строит TaskResult с реальным saved_verdict.id
+        def incident_changes(session: StorageSession, saved_verdict) -> int | None:
+            incident = self.incident_manager.process(session, candidate, verdict=saved_verdict)
+            return incident.id if incident is not None else None
+
+        def result_factory(saved_verdict, incident_id: int | None) -> TaskResult:
+            return TaskResult(
                 task_id=task.id,
                 outcome=Outcome.OK,
                 output=AiValidationOutput(
-                    verdict_id=verdict.id,
+                    verdict_id=saved_verdict.id,
                     incident_id=incident_id,
                 ),
-            ),
-            lambda session: None,  # уже сохранено в транзакции выше
-        )
+            )
 
-    def _persist_verdict_and_incident(
-        self,
-        session: StorageSession,
-        task: Task,
-        candidate: Candidate,
-        verdict: "AiVerdict",
-        prompt_version: int,
-    ) -> int | None:
-        """Сохранить вердикт и обработать инцидент (если is_secret).
-
-        Returns:
-            incident_id если инцидент создан/обновлен, иначе None.
-        """
-        # Сохраняем вердикт (AiVerdict заморожен — создаём копию с task_id)
-        verdict = replace(verdict, task_id=task.id)
-        saved_verdict = session.save_ai_verdict(verdict)
-
-        # Обрабатываем инцидент через менеджер
-        incident = self.incident_manager.process(
-            session, candidate, verdict=saved_verdict
-        )
-
-        return incident.id if incident is not None else None
+        await self.storage.ai_validation_done(task, verdict, incident_changes, result_factory)
 
 
 def create_ai_worker(

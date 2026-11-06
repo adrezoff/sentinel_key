@@ -41,11 +41,15 @@ class App:
         poll_interval_s: float = 0.25,
         ai_enabled: bool = False,
         llm_config: LlmConfig | None = None,
+        use_fake_llm: bool = False,
     ) -> None:
         if not isinstance(fingerprint_key, bytes) or len(fingerprint_key) < 32:
             raise ValueError("fingerprint_key must contain at least 32 bytes")
         if poll_interval_s <= 0:
             raise ValueError("poll_interval_s must be positive")
+        resolved_llm_config = llm_config
+        if ai_enabled and resolved_llm_config is None:
+            resolved_llm_config = LlmConfig.from_env()
         self.storage = SqliteStorage(database)
         self.feed = SqliteFeed(self.storage)
         self.orchestrator = ScanOrchestrator(
@@ -61,7 +65,9 @@ class App:
             analyzer=StaticAnalyzer(),
             incident_manager=IncidentManager(),
             settings=WorkerSettings("local-commit-worker", (TaskKind.COMMIT_ANALYSIS,)),
-            ai_task_factory=DefaultAiTaskFactory() if ai_enabled else None,
+            ai_task_factory=(
+                DefaultAiTaskFactory(resolved_llm_config) if ai_enabled else None
+            ),
         )
         self.ai_worker = None
         if ai_enabled:
@@ -69,8 +75,8 @@ class App:
                 feed=self.feed,
                 storage=self.storage,
                 incident_manager=IncidentManager(),
-                llm_config=LlmConfig(),
-                use_fake_llm=False,
+                llm_config=resolved_llm_config or LlmConfig(),
+                use_fake_llm=use_fake_llm,
             )
         self.poll_interval_s = poll_interval_s
         self._opened = False
@@ -172,7 +178,13 @@ async def _run_scan(args: argparse.Namespace) -> TaskResult:
         target_shas=args.target_shas or [],
         ai_enabled=args.ai_enabled,
     )
-    async with App(args.database, _load_fingerprint_key(), ai_enabled=args.ai_enabled) as app:
+    use_fake_llm = os.getenv("SENTINEL_KEY_USE_FAKE_LLM", "").lower() in ("1", "true", "yes")
+    async with App(
+        args.database,
+        _load_fingerprint_key(),
+        ai_enabled=args.ai_enabled,
+        use_fake_llm=use_fake_llm,
+    ) as app:
         return await app.scan(args.repository, payload)
 
 

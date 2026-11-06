@@ -7,12 +7,13 @@ import re
 import sqlite3
 import time
 from collections.abc import Callable
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TypeVar
 
-from models import AiVerdict, Candidate, Commit, OutboxMessage, Repository, Task, TaskResult
+from models import AiVerdict, Candidate, Commit, OutboxMessage, Repository, Task, TaskResult, TaskStatus
 
-from .exceptions import StorageError, StorageNotInitializedError
+from .exceptions import StorageError, StorageNotInitializedError, TaskLeaseLostError
 from .session import StorageSession
 
 T = TypeVar("T")
@@ -71,6 +72,42 @@ class SqliteStorage:
         async with self._lock:
             connection = self._require_connection()
             return await asyncio.to_thread(operation, StorageSession(connection))
+
+    async def ai_validation_done(
+        self,
+        task: Task,
+        verdict: AiVerdict,
+        incident_changes: Callable[[StorageSession, AiVerdict], object | None],
+        result_factory: Callable[[AiVerdict, object | None], TaskResult],
+    ) -> TaskResult:
+        """Атомарно сохранить вердикт, граф инцидента, результат и статус AI-задачи."""
+        if task.id is None:
+            raise ValueError("task.id is required")
+        now = time.time()
+
+        def finish(session: StorageSession) -> TaskResult:
+            stored = session.get_task(task.id)
+            if stored is None:
+                raise KeyError(f"task not found: {task.id}")
+            lease_expires_at = stored.lease_expires_at
+            if (
+                stored.status is not TaskStatus.RUNNING
+                or stored.lease_owner is None
+                or lease_expires_at is None
+                or lease_expires_at.timestamp() <= now
+            ):
+                raise TaskLeaseLostError("task lease is not active")
+            saved_verdict = session.save_ai_verdict(verdict)
+            incident = incident_changes(session, saved_verdict)
+            result = result_factory(saved_verdict, incident)
+            if result.task_id != stored.id:
+                raise ValueError("result.task_id must match task.id")
+            session.save_task_result(result)
+            stored.transition(TaskStatus.SUCCEEDED, datetime.fromtimestamp(now, tz=timezone.utc))
+            session.update_task(stored)
+            return result
+
+        return await self.run_in_transaction(finish)
 
     async def save_repository(self, repository: Repository) -> Repository:
         """Сохранить репозиторий в отдельной транзакции."""

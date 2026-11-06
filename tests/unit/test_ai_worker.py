@@ -6,6 +6,7 @@ from __future__ import annotations
 import sys
 import unittest
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -90,6 +91,21 @@ class FakeStorage:
         self.candidates[candidate.id] = candidate
         return candidate
 
+    async def ai_validation_done(
+        self,
+        task,
+        verdict,
+        incident_changes,
+        result_factory,
+    ):
+        """Сохранить AI-результат в fake-хранилище и завершить задачу."""
+        saved_verdict = self.save_ai_verdict(verdict)
+        incident = incident_changes(self, saved_verdict)
+        result = result_factory(saved_verdict, incident)
+        self.task_results[task.id] = result
+        task.transition(TaskStatus.SUCCEEDED, datetime.now(timezone.utc))
+        return result
+
     def get_candidate(self, candidate_id):
         return self.candidates.get(candidate_id)
 
@@ -163,6 +179,14 @@ class AiWorkerTests(unittest.IsolatedAsyncioTestCase):
             'fail': AsyncMock(),
             'heartbeat': AsyncMock(),
         })()
+        async def ai_validation_done(storage, task, verdict, incident_changes, result_factory):
+            saved_verdict = storage.save_ai_verdict(verdict)
+            incident = incident_changes(storage, saved_verdict)
+            result = result_factory(saved_verdict, incident)
+            storage.task_results[task.id] = result
+            task.status = TaskStatus.SUCCEEDED
+            return result
+
         self.storage = type('Storage', (), {
             'candidates': {},
             'verdicts': {},
@@ -170,12 +194,14 @@ class AiWorkerTests(unittest.IsolatedAsyncioTestCase):
             'next_candidate_id': 1,
             'next_verdict_id': 1,
             'next_incident_id': 1,
+            'task_results': {},
             'read': _async_read,
             'run_in_transaction': _async_run_in_transaction,
             'save_candidate': lambda self, c: setattr(c, 'id', len(self.candidates) + 1) or self.candidates.update({len(self.candidates) + 1: c}) or c,
             'get_candidate': lambda self, cid: self.candidates.get(cid),
             'save_ai_verdict': lambda self, v: self.verdicts.__setitem__(v.task_id, replace(v, id=len(self.verdicts) + 1)) or self.verdicts[v.task_id],
             'get_ai_verdict_by_task': lambda self, tid: self.verdicts.get(tid),
+            'ai_validation_done': ai_validation_done,
         })()
         self.incident_manager = MagicMock()
         self.config = LlmConfig(

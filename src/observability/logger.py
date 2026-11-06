@@ -15,10 +15,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-# Глобальный сборщик логов для тестов
-_log_buffer: list[dict] = []
-# Глобальный сборщик логов для тестов
-_log_buffer: list[dict] = []
+from security.redaction import contains_secret, redact_text
 
 
 @dataclass(slots=True)
@@ -45,7 +42,7 @@ class StructuredFormatter(logging.Formatter):
             "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
             "level": record.levelname,
             "logger": record.name,
-            "message": record.getMessage(),
+            "message": redact_text(record.getMessage()),
             **self.default_fields,
         }
 
@@ -62,8 +59,8 @@ class StructuredFormatter(logging.Formatter):
                 "processName", "process", "exc_info", "exc_text", "stack_info",
                 "task_id", "run_id", "commit_id", "candidate_id", "message",
             }:
-                if isinstance(value, str) and self._looks_like_secret(value):
-                    log_data[key] = "***MASKED***"
+                if isinstance(value, str):
+                    log_data[key] = "***MASKED***" if contains_secret(value) else value
                 else:
                     log_data[key] = value
 
@@ -71,16 +68,8 @@ class StructuredFormatter(logging.Formatter):
 
     @staticmethod
     def _looks_like_secret(value: str) -> bool:
-        if len(value) < 16:
-            return False
-        import re
-        patterns = [
-            r"^AKIA[A-Z0-9]{16}$",
-            r"^ghp_[A-Za-z0-9_]{36,}$",
-            r"^xox[baprs]-[A-Za-z0-9-]{10,}$",
-            r"^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$",
-        ]
-        return any(re.match(p, value) for p in patterns)
+        """Проверить наличие поддерживаемого секрета в строке."""
+        return contains_secret(value)
 
 
 class SecretSafeLogger(logging.Logger):
@@ -89,20 +78,17 @@ class SecretSafeLogger(logging.Logger):
     def _log(self, level: int, msg: object, args: tuple, exc_info=None, extra=None, stack_info: bool = False, stacklevel: int = 1) -> None:
         if isinstance(msg, str):
             msg = self._sanitize_message(msg)
+        if extra:
+            extra = {
+                key: self._sanitize_message(value) if isinstance(value, str) else value
+                for key, value in extra.items()
+            }
         super()._log(level, msg, args, exc_info, extra, stack_info, stacklevel + 1)
 
     @staticmethod
     def _sanitize_message(msg: str) -> str:
-        import re
-        patterns = [
-            (re.compile(r"\b(AKIA|ASIA)[A-Z0-9]{16}\b"), "AKIA***MASKED***"),
-            (re.compile(r"\bghp_[A-Za-z0-9_]{36,}\b"), "ghp_***MASKED***"),
-            (re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"), "xox***MASKED***"),
-            (re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b"), "JWT.***MASKED***"),
-        ]
-        for pattern, replacement in patterns:
-            msg = pattern.sub(replacement, msg)
-        return msg
+        """Удалить поддерживаемые секреты из произвольного текста сообщения."""
+        return redact_text(msg)
 
 
 class ContextLogger:
@@ -141,7 +127,7 @@ class ContextLogger:
         self._log(logging.WARNING, msg, **kwargs)
 
     def error(self, msg: str, **kwargs) -> None:
-        self._log(logging.WARNING, msg, **kwargs)
+        self._log(logging.ERROR, msg, **kwargs)
 
     def critical(self, msg: str, **kwargs) -> None:
         self._log(logging.CRITICAL, msg, **kwargs)
@@ -192,13 +178,3 @@ def get_logger(name: str = "sentinel_key", context: LogContext = None) -> Contex
     if context is not None:
         return ContextLogger(_root_logger, context)
     return _context_logger
-
-
-def get_test_logs() -> list[dict]:
-    """Возвращает буфер логов для тестов."""
-    return _log_buffer
-
-
-def clear_test_logs() -> None:
-    """Очищает буфер тестовых логов."""
-    _log_buffer.clear()

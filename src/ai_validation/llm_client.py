@@ -181,6 +181,7 @@ class FakeLlmClient:
     delay_s: float = 0.0
     fail_next: bool = False
     fail_code: str = "LLM_NETWORK_ERROR"
+    default_verdict: AiVerdict | None = None
 
     # Протокол
     prompt_version: int = 1
@@ -190,9 +191,14 @@ class FakeLlmClient:
         """Задать ожидаемый вердикт для кандидата."""
         self._verdicts[candidate_id] = verdict
 
+    def set_default_verdict(self, verdict: AiVerdict) -> None:
+        """Задать вердикт по умолчанию для неизвестных кандидатов."""
+        self.default_verdict = verdict
+
     def clear(self) -> None:
         """Очистить все заданные вердикты."""
         self._verdicts.clear()
+        self.default_verdict = None
 
     async def complete(
         self,
@@ -215,7 +221,10 @@ class FakeLlmClient:
 
         verdict = self._verdicts.get(candidate.id)
         if verdict is None:
-            raise LlmInvalidResponseError(f"No fake verdict configured for candidate {candidate.id}")
+            if self.default_verdict is not None:
+                verdict = self.default_verdict
+            else:
+                raise LlmInvalidResponseError(f"No fake verdict configured for candidate {candidate.id}")
 
         # Вернуть копию с правильным prompt_version из payload
         return AiVerdict(
