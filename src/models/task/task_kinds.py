@@ -13,6 +13,8 @@ from enum import IntEnum
 from typing import Any
 
 from ..common.codec import from_jsonable, to_jsonable
+from ..ai_validation.ai_validation_output import AiValidationOutput
+from ..ai_validation.ai_validation_payload import AiValidationPayload
 from .commit_analysis_output import CommitAnalysisOutput
 from .commit_analysis_payload import CommitAnalysisPayload
 from .scan_summary import ScanSummary
@@ -139,5 +141,14 @@ register_task_kind(
         output_type=CommitAnalysisOutput,
         default_priority=100,
         default_max_attempts=3,
+    )
+)
+register_task_kind(
+    TaskKindSpec(
+        kind=TaskKind.AI_VALIDATION,
+        payload_type=AiValidationPayload,
+        output_type=AiValidationOutput,
+        default_priority=50,
+        default_max_attempts=5,
     )
 )

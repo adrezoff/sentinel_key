@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from models import (
+    AiVerdict,
     Candidate,
     Commit,
     CommitParent,
@@ -506,6 +507,80 @@ class StorageSession:
             "SELECT * FROM candidates WHERE id = ?", (candidate_id,)
         ).fetchone()
         return None if row is None else self._candidate_from_row(row)
+
+    def save_ai_verdict(self, verdict: AiVerdict) -> AiVerdict:
+        """Идемпотентно сохранить вердикт ИИ (UNIQUE на task_id).
+
+        ``AiVerdict`` — frozen-модель, поэтому сохранённый экземпляр с
+        присвоенным ``id`` возвращается из метода, а входной объект не
+        мутируется.
+        """
+        self._connection.execute(
+            """
+            INSERT INTO ai_verdicts(
+                task_id, candidate_id, is_secret, secret_type, confidence,
+                severity, reason, recommendation, model, prompt_version, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(task_id) DO NOTHING
+            """,
+            (
+                verdict.task_id,
+                verdict.candidate_id,
+                int(verdict.is_secret),
+                int(verdict.secret_type),
+                verdict.confidence,
+                int(verdict.severity),
+                verdict.reason,
+                verdict.recommendation,
+                verdict.model,
+                verdict.prompt_version,
+                _to_epoch_ms(verdict.created_at),
+            ),
+        )
+        row = self._connection.execute(
+            "SELECT * FROM ai_verdicts WHERE task_id = ?", (verdict.task_id,)
+        ).fetchone()
+        assert row is not None
+        return self._ai_verdict_from_row(row)
+
+    def get_ai_verdict(self, verdict_id: int) -> AiVerdict | None:
+        """Загрузить вердикт ИИ по первичному ключу."""
+        row = self._connection.execute(
+            "SELECT * FROM ai_verdicts WHERE id = ?", (verdict_id,)
+        ).fetchone()
+        return None if row is None else self._ai_verdict_from_row(row)
+
+    def get_ai_verdict_by_candidate(self, candidate_id: int) -> AiVerdict | None:
+        """Найти вердикт ИИ по кандидату (последний, если несколько)."""
+        row = self._connection.execute(
+            "SELECT * FROM ai_verdicts WHERE candidate_id = ? ORDER BY id DESC LIMIT 1",
+            (candidate_id,),
+        ).fetchone()
+        return None if row is None else self._ai_verdict_from_row(row)
+
+    def get_ai_verdict_by_task(self, task_id: int) -> AiVerdict | None:
+        """Найти вердикт ИИ по задаче AI_VALIDATION."""
+        row = self._connection.execute(
+            "SELECT * FROM ai_verdicts WHERE task_id = ?", (task_id,)
+        ).fetchone()
+        return None if row is None else self._ai_verdict_from_row(row)
+
+    @staticmethod
+    def _ai_verdict_from_row(row: sqlite3.Row) -> AiVerdict:
+        return AiVerdict(
+            id=row["id"],
+            task_id=row["task_id"],
+            candidate_id=row["candidate_id"],
+            is_secret=bool(row["is_secret"]),
+            secret_type=SecretType(row["secret_type"]),
+            confidence=row["confidence"],
+            severity=Severity(row["severity"]),
+            reason=row["reason"],
+            recommendation=row["recommendation"],
+            model=row["model"],
+            prompt_version=row["prompt_version"],
+            created_at=_from_epoch_ms(row["created_at"]),
+        )
 
     def save_incident(
         self, incident: Incident, *, expected_version: int | None = None

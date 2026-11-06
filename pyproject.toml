@@ -1,0 +1,47 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sentinel-key"
+version = "0.1.0"
+description = "Асинхронный поиск секретов в Git-репозиториях и их истории"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "openai>=3.45,<4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.2,<10",
+    "pytest-asyncio>=1.4,<2",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = [
+    "src/ai_validation",
+    "src/config",
+    "src/feed",
+    "src/git_collector",
+    "src/incident_manager",
+    "src/models",
+    "src/observability",
+    "src/orchestrator",
+    "src/preprocessor",
+    "src/security",
+    "src/static_analyzer",
+    "src/storage",
+    "src/workers",
+]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/application.py" = "application.py"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+asyncio_mode = "strict"
+markers = [
+    "real_llm: тест требует внешнего LLM API и ручного opt-in",
+]

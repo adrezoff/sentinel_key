@@ -2,7 +2,7 @@
 
 Исходники моделей: `sentinel_key/src/models/` — **один файл на одну модель** (класс), сгруппированы по подпакетам `repository` / `task` / `candidate` / `incident` (+ `common`). Этот документ — источник истины: код моделей пишется по нему, изменения моделей начинаются с правки документа.
 
-> **Статус реализации.** Модели `AiVerdict`, `AiValidationPayload`, `AiValidationOutput` описаны здесь полностью, но в коде их добавляет трек `ai_validation`. Значение `TaskKind.AI_VALIDATION = 3` уже зарезервировано.
+> **Статус реализации.** Модели `AiVerdict`, `AiValidationPayload`, `AiValidationOutput` реализованы в `src/models/ai_validation/` и зарегистрированы в `TaskKind` (значение 3).
 
 ## 1. Соглашения
 

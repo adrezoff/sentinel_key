@@ -25,6 +25,9 @@ from preprocessor import Preprocessor
 from static_analyzer import StaticAnalyzer
 from storage import SqliteStorage
 from workers import CommitWorker, WorkerSettings
+from workers.ai import AiWorker, create_ai_worker
+from workers.ai_factory import DefaultAiTaskFactory
+from ai_validation.llm_client import LlmConfig
 
 
 class App:
@@ -36,11 +39,17 @@ class App:
         fingerprint_key: bytes,
         *,
         poll_interval_s: float = 0.25,
+        ai_enabled: bool = False,
+        llm_config: LlmConfig | None = None,
+        use_fake_llm: bool = False,
     ) -> None:
         if not isinstance(fingerprint_key, bytes) or len(fingerprint_key) < 32:
             raise ValueError("fingerprint_key must contain at least 32 bytes")
         if poll_interval_s <= 0:
             raise ValueError("poll_interval_s must be positive")
+        resolved_llm_config = llm_config
+        if ai_enabled and resolved_llm_config is None:
+            resolved_llm_config = LlmConfig.from_env()
         self.storage = SqliteStorage(database)
         self.feed = SqliteFeed(self.storage)
         self.orchestrator = ScanOrchestrator(
@@ -56,9 +65,22 @@ class App:
             analyzer=StaticAnalyzer(),
             incident_manager=IncidentManager(),
             settings=WorkerSettings("local-commit-worker", (TaskKind.COMMIT_ANALYSIS,)),
+            ai_task_factory=(
+                DefaultAiTaskFactory(resolved_llm_config) if ai_enabled else None
+            ),
         )
+        self.ai_worker = None
+        if ai_enabled:
+            self.ai_worker = create_ai_worker(
+                feed=self.feed,
+                storage=self.storage,
+                incident_manager=IncidentManager(),
+                llm_config=resolved_llm_config or LlmConfig(),
+                use_fake_llm=use_fake_llm,
+            )
         self.poll_interval_s = poll_interval_s
         self._opened = False
+        self._ai_enabled = ai_enabled
 
     async def __aenter__(self) -> App:
         """Открыть и мигрировать SQLite перед сканированием."""
@@ -80,9 +102,7 @@ class App:
         path = Path(repository_path).expanduser().resolve()
         if not path.is_dir():
             raise ValueError("repository path must be an existing directory")
-        selected_payload = payload if payload is not None else ScanTaskPayload(ai_enabled=False)
-        if selected_payload.ai_enabled:
-            raise ValueError("AI validation is not available in the local MVP")
+        selected_payload = payload if payload is not None else ScanTaskPayload(ai_enabled=self._ai_enabled)
         repository = await self.storage.run_in_transaction(
             lambda session: session.get_repository_by_location(str(path))
             or session.save_repository(Repository(location=str(path), name=path.name))
@@ -92,16 +112,23 @@ class App:
             progress = bool(await self.feed.reap_expired())
             progress = await self.orchestrator.plan_once() or progress
             progress = await self.commit_worker.run_once() or progress
+            if self.ai_worker is not None:
+                progress = await self.ai_worker.run_once() or progress
             progress = bool(await self.orchestrator.finalize_ready()) or progress
             current = await self.storage.get_task(root.id)
             if current is None:
                 raise RuntimeError("scan task disappeared")
             if current.is_terminal:
+                # Close AI worker if it exists
+                if self.ai_worker is not None:
+                    # AI worker will be cleaned up when the app closes
+                    pass
                 result = await self.storage.get_task_result(root.id)
                 if result is None:
                     raise RuntimeError("scan finished without a result")
                 return result
             if not progress:
+                await asyncio.sleep(self.poll_interval_s)
                 await asyncio.sleep(self.poll_interval_s)
 
 
@@ -120,6 +147,7 @@ def _parser() -> argparse.ArgumentParser:
         "--target-sha", action="append", dest="target_shas", help="SHA для режима targeted"
     )
     scan.add_argument("--batch-size", type=int, default=50)
+    scan.add_argument("--ai-enabled", action="store_true", help="Включить AI-валидацию (требует SENTINEL_KEY_LLM_API_KEY)")
     return parser
 
 
@@ -148,9 +176,15 @@ async def _run_scan(args: argparse.Namespace) -> TaskResult:
         batch_size=args.batch_size,
         refs=args.refs if args.refs is not None else ["--all"],
         target_shas=args.target_shas or [],
-        ai_enabled=False,
+        ai_enabled=args.ai_enabled,
     )
-    async with App(args.database, _load_fingerprint_key()) as app:
+    use_fake_llm = os.getenv("SENTINEL_KEY_USE_FAKE_LLM", "").lower() in ("1", "true", "yes")
+    async with App(
+        args.database,
+        _load_fingerprint_key(),
+        ai_enabled=args.ai_enabled,
+        use_fake_llm=use_fake_llm,
+    ) as app:
         return await app.scan(args.repository, payload)
 
 
