@@ -508,6 +508,13 @@ class StorageSession:
         ).fetchone()
         return None if row is None else self._candidate_from_row(row)
 
+    def update_candidate_route(self, candidate_id: int, route: Route) -> None:
+        """Обновить маршрут кандидата."""
+        self._connection.execute(
+            "UPDATE candidates SET route = ? WHERE id = ?",
+            (int(route), candidate_id),
+        )
+
     def save_ai_verdict(self, verdict: AiVerdict) -> AiVerdict:
         """Идемпотентно сохранить вердикт ИИ (UNIQUE на task_id).
 

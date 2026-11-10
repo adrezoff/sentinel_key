@@ -108,6 +108,21 @@ class App:
             or session.save_repository(Repository(location=str(path), name=path.name))
         )
         root = await self.orchestrator.start_scan(repository.id, selected_payload)
+
+        # Check if resuming a run with pending AI_VALIDATION tasks but AI is disabled
+        if not self._ai_enabled:
+            pending_ai_tasks = await self.storage.read(
+                lambda session: any(
+                    t.kind is TaskKind.AI_VALIDATION and not t.is_terminal
+                    for t in session.list_run_tasks(root.id)
+                )
+            )
+            if pending_ai_tasks:
+                raise RuntimeError(
+                    "Cannot resume scan: run has pending AI_VALIDATION tasks but AI is disabled. "
+                    "Re-run with ai_enabled=True to process AI tasks."
+                )
+
         while True:
             progress = bool(await self.feed.reap_expired())
             progress = await self.orchestrator.plan_once() or progress

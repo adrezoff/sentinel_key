@@ -79,8 +79,13 @@ class SqliteStorage:
         verdict: AiVerdict,
         incident_changes: Callable[[StorageSession, AiVerdict], object | None],
         result_factory: Callable[[AiVerdict, object | None], TaskResult],
+        worker_id: str,
     ) -> TaskResult:
-        """Атомарно сохранить вердикт, граф инцидента, результат и статус AI-задачи."""
+        """Атомарно сохранить вердикт, граф инцидента, результат и статус AI-задачи.
+
+        Проверяет, что задача всё ещё принадлежит вызывающему воркеру (lease_owner)
+        и относится к той же попытке claim (attempts).
+        """
         if task.id is None:
             raise ValueError("task.id is required")
         now = time.time()
@@ -95,8 +100,12 @@ class SqliteStorage:
                 or stored.lease_owner is None
                 or lease_expires_at is None
                 or lease_expires_at.timestamp() <= now
+                or stored.lease_owner != worker_id
+                or stored.attempts != task.attempts
             ):
-                raise TaskLeaseLostError("task lease is not active")
+                raise TaskLeaseLostError(
+                    "task lease is not active, owned by another worker, or superseded"
+                )
             saved_verdict = session.save_ai_verdict(verdict)
             incident = incident_changes(session, saved_verdict)
             result = result_factory(saved_verdict, incident)

@@ -36,12 +36,7 @@ class RealLlmClientTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_real_llm_minimal_call(self) -> None:
         """Test LLM with minimal prompt - should return valid JSON verdict."""
-        config = LlmConfig(
-            api_key=self.api_key,
-            temperature=0.1,
-            max_tokens=4000,
-            timeout_s=30.0,
-        )
+        config = LlmConfig.from_env()
         client = RealLlmClient(config)
 
         # Create a simple candidate with obvious non-secret
@@ -90,12 +85,7 @@ class RealLlmClientTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_real_llm_secret_detection(self) -> None:
         """Test LLM with a candidate that looks like a secret (but is masked)."""
-        config = LlmConfig(
-            api_key=self.api_key,
-            temperature=0.1,
-            max_tokens=4000,
-            timeout_s=30.0,
-        )
+        config = LlmConfig.from_env()
         client = RealLlmClient(config)
 
         candidate = Candidate(

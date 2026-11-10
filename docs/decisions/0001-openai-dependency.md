@@ -9,6 +9,10 @@
 
 Стандартная библиотека `urllib` требует много boilerplate кода для работы с JSON, ошибками, ретраями. Библиотека `openai` — де-факто стандарт для OpenAI-совместимых API.
 
+## Границы совместимости
+
+`openai.AsyncOpenAI` работает с сервисами, реализующими OpenAI Chat Completions API: OpenAI, NVIDIA NIM/Nemotron, DeepSeek и другие совместимые провайдеры. Нативный Anthropic Claude API не является OpenAI-совместимым и требует отдельного клиента либо OpenAI-compatible gateway; выбор такого шлюза не входит в текущий ADR. Клиент скрыт за интерфейсом `LlmClient`, поэтому смена транспорта не затрагивает остальные модули.
+
 ## Решение
 Добавить зависимость `openai>=3.45,<4` в проект. Использовать `openai.AsyncOpenAI` в `RealLlmClient`.
 

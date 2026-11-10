@@ -137,16 +137,55 @@ class IncidentManager:
         candidate_id = candidate.id
         if candidate_id is None:
             raise ValueError("candidate.id is required before incident processing")
-        if not self.decide(candidate, verdict=verdict):
-            return None
+
+        # Политика определяет локальный путь только при отсутствии вердикта;
+        # при наличии AI-вердикта он является финальным.
+        local_decision = verdict is None and self.policy.should_open(candidate)
+        ai_decision = (
+            verdict is not None
+            and verdict.is_secret
+            and verdict.confidence >= self.policy.min_ai_confidence
+        )
+        ai_negative = verdict is not None and not verdict.is_secret
 
         when = now if now is not None else utc_now()
         incident = session.get_incident_by_fingerprint(
             candidate.repository_id, candidate.value_fingerprint
         )
 
+        # AI-вето: отрицательный финальный вердикт не должен оставлять
+        # ранее открытое локальное решение активным.
+        if ai_negative:
+            if incident is None or incident.status not in (
+                IncidentStatus.OPEN,
+                IncidentStatus.ACKNOWLEDGED,
+            ):
+                return None
+            incident_id = incident.id
+            if incident_id is None:
+                raise ValueError("incident.id is required after lookup")
+            previous_version = incident.version
+            session.save_incident_event(
+                incident.set_status(
+                    IncidentStatus.FALSE_POSITIVE,
+                    "ai",
+                    "AI validation rejected the finding",
+                    now=when,
+                )
+            )
+            _create_outbox_message(
+                session,
+                incident,
+                IncidentEventKind.STATUS_CHANGED,
+            )
+            session.save_incident(incident, expected_version=previous_version)
+            return incident
+
+        if not local_decision and not ai_decision:
+            return None
+
         # Определяем параметры инцидента: локальные или из AI-вердикта
-        if verdict is not None and verdict.is_secret:
+        if ai_decision:
             # AI-ветка: используем данные из вердикта
             secret_type = verdict.secret_type
             severity = verdict.severity
@@ -208,8 +247,9 @@ class IncidentManager:
         incident_id = incident.id
         if incident_id is None:
             raise ValueError("incident.id is required after lookup")
-        if session.has_occurrence(incident_id, candidate_id):
-            return incident
+
+        # Проверяем, есть ли уже occurrence для этого кандидата
+        occurrence_exists = session.has_occurrence(incident_id, candidate_id)
 
         previous_version = incident.version
         if incident.status in (
@@ -221,20 +261,24 @@ class IncidentManager:
                 incident.set_status(IncidentStatus.OPEN, "system", "Secret detected again", now=when)
             )
             _create_outbox_message(session, incident, IncidentEventKind.REOPENED)
-        occurrence = incident.add_occurrence(candidate, ai_task_id=ai_task_id, now=when)
-        session.save_occurrence(occurrence)
-        session.save_incident_event(
-            IncidentEvent(
-                incident_id=incident.id,
-                kind=IncidentEventKind.OCCURRENCE_ADDED,
-                actor="system",
-                created_at=when,
+
+        # Добавляем occurrence только если его ещё нет
+        if not occurrence_exists:
+            occurrence = incident.add_occurrence(candidate, ai_task_id=ai_task_id, now=when)
+            session.save_occurrence(occurrence)
+            session.save_incident_event(
+                IncidentEvent(
+                    incident_id=incident.id,
+                    kind=IncidentEventKind.OCCURRENCE_ADDED,
+                    actor="system",
+                    created_at=when,
+                )
             )
-        )
-        _create_outbox_message(session, incident, IncidentEventKind.OCCURRENCE_ADDED)
-        # При обновлении: используем AI-вердикт если есть, иначе локальную политику
+            _create_outbox_message(session, incident, IncidentEventKind.OCCURRENCE_ADDED)
+
+        # При обновлении: применяем AI-вердикт если есть, иначе локальную политику
         old_severity = incident.severity
-        if verdict is not None and verdict.is_secret:
+        if ai_decision:
             incident.last_verdict_id = verdict.id
             target_severity = self.policy.bump_severity(verdict.severity, still_in_head=still_in_head)
             if target_severity > incident.severity:
@@ -256,3 +300,12 @@ class IncidentManager:
             _create_outbox_message(session, incident, IncidentEventKind.SEVERITY_RAISED, old_severity)
         session.save_incident(incident, expected_version=previous_version)
         return incident
+
+    def _should_open_locally(self, candidate: Candidate) -> bool:
+        """Проверить, достаточно ли локального скора для открытия инцидента без ИИ.
+
+        Только trusted_formats открывают инцидент локально без ИИ.
+        """
+        if candidate.is_test_context:
+            return False
+        return candidate.secret_type in self.policy.trusted_formats

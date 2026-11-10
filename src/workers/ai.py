@@ -123,6 +123,13 @@ class AiWorker:
                 await heartbeat
             except asyncio.CancelledError:
                 pass
+            except LeaseLostError:
+                # Heartbeat failed because task was cancelled/reclaimed — this is expected
+                pass
+            except BaseException as e:
+                # Heartbeat completed with an unexpected exception
+                # Log and re-raise to not swallow the error
+                raise
         return True
 
     def _map_llm_error(self, e: LlmError) -> ErrorCode:
@@ -189,7 +196,7 @@ class AiWorker:
                 ),
             )
 
-        await self.storage.ai_validation_done(task, verdict, incident_changes, result_factory)
+        await self.storage.ai_validation_done(task, verdict, incident_changes, result_factory, self.settings.worker_id)
 
 
 def create_ai_worker(

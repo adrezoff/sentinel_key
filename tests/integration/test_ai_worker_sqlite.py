@@ -162,6 +162,7 @@ class SqliteAiWorkerTests(unittest.IsolatedAsyncioTestCase):
                 self._verdict(candidate.id, claimed.id),
                 lambda session, verdict: (_ for _ in ()).throw(RuntimeError("incident failure")),
                 lambda verdict, incident: None,
+                worker_id=claimed.lease_owner,
             )
 
         self.assertIsNone(await self.storage.get_ai_verdict_by_task(task.id))

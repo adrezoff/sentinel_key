@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -41,7 +42,7 @@ class LlmConfigTests(unittest.TestCase):
         self.assertEqual(config.max_attempts, 3)
         self.assertEqual(config.retry_base_s, 1.0)
         self.assertEqual(config.max_concurrent, 5)
-        self.assertEqual(config.prompt_version, 1)
+        self.assertEqual(config.prompt_version, 2)
         self.assertIsNone(config.api_key)
 
     def test_from_env_with_defaults(self) -> None:
@@ -50,3 +51,63 @@ class LlmConfigTests(unittest.TestCase):
         self.assertEqual(config.api_endpoint, "https://integrate.api.nvidia.com/v1")
         self.assertEqual(config.model, "nvidia/nemotron-3-ultra-550b-a55b")
         self.assertIsNone(config.api_key)
+
+
+class ParseLlmResponseTests(unittest.TestCase):
+    """Tests for LLM response parsing and validation."""
+
+    def test_boolean_confidence_rejected(self) -> None:
+        """Boolean confidence=true should be rejected, not converted to 1.0."""
+        response = json.dumps({
+            "is_secret": True,
+            "secret_type": "GITHUB_TOKEN",
+            "confidence": True,  # boolean, not float
+            "severity": "HIGH",
+            "reason": "test reason",
+            "recommendation": "test recommendation",
+        })
+        with self.assertRaises(LlmInvalidResponseError) as ctx:
+            parse_llm_response(response, candidate_id=1, task_id=1, model="test", prompt_version=1)
+        self.assertIn("confidence", str(ctx.exception))
+
+    def test_boolean_confidence_false_rejected(self) -> None:
+        """Boolean confidence=false should also be rejected."""
+        response = json.dumps({
+            "is_secret": True,
+            "secret_type": "GITHUB_TOKEN",
+            "confidence": False,  # boolean, not float
+            "severity": "HIGH",
+            "reason": "test reason",
+            "recommendation": "test recommendation",
+        })
+        with self.assertRaises(LlmInvalidResponseError) as ctx:
+            parse_llm_response(response, candidate_id=1, task_id=1, model="test", prompt_version=1)
+        self.assertIn("confidence", str(ctx.exception))
+
+    def test_valid_confidence_float_accepted(self) -> None:
+        """Valid float confidence should be accepted."""
+        response = json.dumps({
+            "is_secret": True,
+            "secret_type": "GITHUB_TOKEN",
+            "confidence": 0.95,
+            "severity": "HIGH",
+            "reason": "test reason",
+            "recommendation": "test recommendation",
+        })
+        verdict = parse_llm_response(response, candidate_id=1, task_id=1, model="test", prompt_version=1)
+        self.assertEqual(verdict.confidence, 0.95)
+        self.assertTrue(verdict.is_secret)
+
+    def test_valid_confidence_int_accepted(self) -> None:
+        """Valid int confidence (0 or 1) should be accepted."""
+        response = json.dumps({
+            "is_secret": True,
+            "secret_type": "GITHUB_TOKEN",
+            "confidence": 1,
+            "severity": "HIGH",
+            "reason": "test reason",
+            "recommendation": "test recommendation",
+        })
+        verdict = parse_llm_response(response, candidate_id=1, task_id=1, model="test", prompt_version=1)
+        self.assertEqual(verdict.confidence, 1.0)
+        self.assertTrue(verdict.is_secret)

@@ -179,7 +179,7 @@ class AiWorkerTests(unittest.IsolatedAsyncioTestCase):
             'fail': AsyncMock(),
             'heartbeat': AsyncMock(),
         })()
-        async def ai_validation_done(storage, task, verdict, incident_changes, result_factory):
+        async def ai_validation_done(storage, task, verdict, incident_changes, result_factory, worker_id):
             saved_verdict = storage.save_ai_verdict(verdict)
             incident = incident_changes(storage, saved_verdict)
             result = result_factory(saved_verdict, incident)

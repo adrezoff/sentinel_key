@@ -57,7 +57,7 @@ class LlmConfig:
     max_concurrent: int = 5
 
     # Версия промпта (входит в idempotency_key задачи AI_VALIDATION)
-    prompt_version: int = 1
+    prompt_version: int = 2
 
     @classmethod
     def from_env(cls) -> "LlmConfig":
@@ -268,7 +268,10 @@ USER_PROMPT_TEMPLATE = """Analyze this code snippet for secrets:
 File: {file_path}
 Line: {line_number}
 Secret type hint: {secret_type}
+Key name: {key_name}
 Masked value: {value_masked}
+Source line (masked):
+{source_line_masked}
 Context (masked):
 {context_masked}
 Regex rules matched: {regex_rules}
@@ -289,7 +292,9 @@ def build_prompt(candidate: Candidate) -> tuple[str, str]:
         file_path=candidate.file_path,
         line_number=candidate.line_number,
         secret_type=candidate.secret_type.name,
+        key_name=candidate.key_name or "N/A",
         value_masked=candidate.value_masked,
+        source_line_masked=candidate.source_line_masked,
         context_masked=candidate.context_masked,
         regex_rules=json.dumps(candidate.regex_rules, ensure_ascii=False),
         entropy=candidate.entropy,
@@ -338,7 +343,8 @@ def parse_llm_response(response_text: str, candidate_id: int, task_id: int, mode
 
     # confidence
     confidence = data["confidence"]
-    if not isinstance(confidence, (int, float)) or not 0.0 <= confidence <= 1.0:
+    # Explicitly reject bool (since bool is subclass of int in Python)
+    if isinstance(confidence, bool) or not isinstance(confidence, (int, float)) or not 0.0 <= confidence <= 1.0:
         raise LlmInvalidResponseError("confidence must be float in [0.0, 1.0]")
 
     # severity

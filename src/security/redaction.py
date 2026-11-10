@@ -63,7 +63,7 @@ API_KEY_PATTERN = RedactionPattern(
 )
 PASSWORD_PATTERN = RedactionPattern(
     "PASSWORD",
-    re.compile(r"\b(?:password|pwd|pass)\s*[:=]\s*\S{8,}\b", re.IGNORECASE),
+    re.compile(r"\b(?:password|pwd|pass)\s*[:=]\s*(?!\S*(?:\.\.\.|\*{3,}|<REDACTED>))\S{8,}\b", re.IGNORECASE),
 )
 VALUE_FINGERPRINT_PATTERN = RedactionPattern(
     "VALUE_FINGERPRINT",

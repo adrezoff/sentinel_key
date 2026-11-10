@@ -241,7 +241,7 @@ commit_ids → git_collector.get_diff → diff_queue(maxsize)
 
 **Фиксация результата — одна транзакция:**
 1. `Candidate` с `route ∈ {SUSPICIOUS, AI_VALIDATION}` → upsert в `candidates` по `UNIQUE(commit_id, file_path, line_number, value_fingerprint)`;
-2. для `route = AI_VALIDATION` при `ai_enabled` → `Task(AI_VALIDATION)` в ленту (идемпотентно по `candidate_id + prompt_version`);
+2. для `route = AI_VALIDATION` при `ai_enabled` → `Task(AI_VALIDATION)` в ленту (идемпотентно по `candidate_id + prompt_version`); ранее сохранённый `SUSPICIOUS`-кандидат при целевом AI-пересканировании обновляется до `AI_VALIDATION`;
 3. прямые инциденты по `trusted_formats` — через `incident_manager`;
 4. успешные коммиты → `PROCESSED` (+`processed_at`, `scan_run_id`, `last_task_id`), неуспешные → `FAILED` (+`error_code`);
 5. `TaskResult(CommitAnalysisOutput)`.
@@ -275,7 +275,7 @@ commit_ids → git_collector.get_diff → diff_queue(maxsize)
 3. Собрать prompt. System: роль security-классификатора, определение секрета, явный список типичных false positive (UUID, hash, timestamps, тестовые данные, placeholders, публичная конфигурация, обычные случайные строки), требование строго структурированного JSON. User (динамически): repository, commit, file, line, masked code, context, token, entropy, regex matches.
 4. Вызвать `LlmClient` (интерфейс; в тестах — фейк) под `Semaphore` и с таймаутом.
 5. **Разобрать и провалидировать** JSON → `AiVerdict` (типы, `confidence ∈ [0,1]`, enum). Невалидный ответ → `LLM_INVALID_RESPONSE` (retry), а не «не секрет».
-6. В одной транзакции: `AiVerdict` + вызов `incident_manager` + `TaskResult(AiValidationOutput)`.
+6. В одной транзакции: `AiVerdict` + вызов `incident_manager` + `TaskResult(AiValidationOutput)`; перед записью проверяются владелец и поколение аренды (`lease_owner`, `attempts`), поэтому поздний ответ старой попытки отбрасывается.
 
 **Ошибки и ретраи.** Сеть, 429, 5xx, таймаут, невалидный JSON → `retryable`; backoff 1→2→4→8 с до `max_attempts = 5`; затем `FAILED(LLM_FAILED)`: кандидат остаётся без вердикта, запуск получает `PARTIAL`, остальное не затронуто. Новый `prompt_version` даёт новый `idempotency_key`, поэтому переанализ возможен вручную.
 
@@ -320,7 +320,7 @@ still_in_head=None)` выполняется синхронно внутри `Sto
 - Версионирование схемы (миграции).
 - Составные транзакционные операции (единица атомарности):
   - `commit_analysis_done(task, candidates, ai_tasks, commit_updates, direct_incidents, result)`;
-  - `ai_validation_done(task, verdict, incident_changes, outbox, result)`;
+  - `ai_validation_done(task, verdict, incident_changes, result_factory, worker_id)`;
   - `run_finalized(root_task, summary, repository_update)`.
 - Сырые значения секретов в БД не хранятся; ключ HMAC живёт вне БД.
 
