@@ -209,7 +209,7 @@ class CommitWorker:
                         candidates_total += 1
                         # Если AI включен и кандидат имеет маршрут SUSPICIOUS (был создан без AI),
                         # обновляем маршрут на AI_VALIDATION и создаём AI-задачу.
-                        if ai_enabled and saved.route is Route.SUSPICIOUS:
+                        if ai_enabled and candidate.route is Route.AI_VALIDATION and saved.route is Route.SUSPICIOUS:
                             saved.route = Route.AI_VALIDATION
                             session.update_candidate_route(saved.id, Route.AI_VALIDATION)
                         if saved.route is Route.SUSPICIOUS:

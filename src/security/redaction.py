@@ -50,7 +50,9 @@ BEARER_TOKEN_PATTERN = RedactionPattern(
 DB_URL_WITH_PASSWORD_PATTERN = RedactionPattern(
     "DB_URL_WITH_PASSWORD",
     re.compile(
-        r"\b(?:postgresql|mysql|mongodb|redis)://[^:]+:[^@\s]+@[^\s]+\b",
+        r"\b(?:postgresql|mysql|mongodb|redis)://[^:\s]+:"
+        r"(?!(?:[^@\s]{1,4}\.\.\.[^@\s]{1,4}|\*{1,8})@)"
+        r"[^@\s]+@[^\s]+\b",
         re.IGNORECASE,
     ),
 )

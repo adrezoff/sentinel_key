@@ -105,6 +105,7 @@ class AiWorker:
                 await self.feed.fail(
                     task,
                     TaskError(error_code, f"llm error: {e.code or 'UNKNOWN'}", retryable=retryable),
+                    side_effects=lambda session: self._local_fallback(session, task),
                 )
             except LeaseLostError:
                 pass
@@ -131,6 +132,16 @@ class AiWorker:
                 # Log and re-raise to not swallow the error
                 raise
         return True
+
+    def _local_fallback(self, session: StorageSession, task: Task) -> None:
+        """Применить локальную политику при окончательной ошибке LLM в общей транзакции."""
+        if not isinstance(task.payload, AiValidationPayload):
+            raise ValueError("invalid AI_VALIDATION payload")
+        candidate = session.get_candidate(task.payload.candidate_id)
+        if candidate is None:
+            raise ValueError("candidate not found")
+        latest = session.get_ai_verdict_by_candidate(candidate.id)
+        self.incident_manager.process(session, candidate, verdict=latest)
 
     def _map_llm_error(self, e: LlmError) -> ErrorCode:
         """Маппинг LLM исключений на ErrorCode."""

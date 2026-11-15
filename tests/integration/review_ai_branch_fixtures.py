@@ -41,9 +41,10 @@ def candidate(repository_id: int, commit_id: int) -> Candidate:
     )
 
 
-def verdict(c: Candidate, t: Task) -> AiVerdict:
+def verdict(c: Candidate, t: Task, **overrides) -> AiVerdict:
     """Create a test AI verdict for the given candidate and task."""
-    return AiVerdict(
+    from dataclasses import replace
+    return replace(AiVerdict(
         task_id=t.id,
         candidate_id=c.id,
         is_secret=True,
@@ -54,7 +55,7 @@ def verdict(c: Candidate, t: Task) -> AiVerdict:
         recommendation="Rotate the token",
         model="fake-model",
         prompt_version=1,
-    )
+    ), **overrides)
 
 
 def response(*, confidence=None, severity=None) -> dict:

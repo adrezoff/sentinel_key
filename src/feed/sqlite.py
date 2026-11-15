@@ -101,7 +101,7 @@ class SqliteFeed:
 
         await self._storage.run_in_transaction(finish)
 
-    async def fail(self, task: Task, error: TaskError) -> None:
+    async def fail(self, task: Task, error: TaskError, side_effects: SideEffects | None = None) -> None:
         """Запланировать повтор или завершить задачу и сохранить итоговую ошибку."""
         if task.id is None:
             raise ValueError("task.id is required")
@@ -110,9 +110,13 @@ class SqliteFeed:
         def record_failure(session: Any) -> None:
             stored = session.get_task(task.id)
             self._ensure_active_lease(stored, now)
+            if stored.lease_owner != task.lease_owner or stored.attempts != task.attempts:
+                raise LeaseLostError("task lease is superseded")
             stored.schedule_retry(error, now)
             session.update_task(stored)
             if stored.status is TaskStatus.FAILED:
+                if side_effects is not None:
+                    side_effects(session)
                 session.save_task_result(
                     TaskResult(
                         task_id=stored.id,

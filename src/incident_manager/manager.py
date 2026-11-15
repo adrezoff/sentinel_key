@@ -41,6 +41,18 @@ class IncidentSession(Protocol):
         """Сохранить обнаружение идемпотентно."""
         ...
 
+    def list_occurrences(self, incident_id: int) -> list[Occurrence]:
+        """Загрузить обнаружения для проверки остальных подтверждений."""
+        ...
+
+    def get_candidate(self, candidate_id: int) -> Candidate | None:
+        """Загрузить кандидата обнаружения."""
+        ...
+
+    def get_ai_verdict_by_candidate(self, candidate_id: int) -> AiVerdict | None:
+        """Загрузить последний вердикт кандидата."""
+        ...
+
     def save_incident_event(self, event: IncidentEvent) -> IncidentEvent:
         """Добавить запись в журнал инцидента."""
         ...
@@ -164,6 +176,13 @@ class IncidentManager:
             incident_id = incident.id
             if incident_id is None:
                 raise ValueError("incident.id is required after lookup")
+            for occurrence in session.list_occurrences(incident_id):
+                if occurrence.candidate_id == candidate_id:
+                    continue
+                other = session.get_candidate(occurrence.candidate_id)
+                latest = session.get_ai_verdict_by_candidate(occurrence.candidate_id)
+                if other is not None and self.decide(other, latest):
+                    return incident
             previous_version = incident.version
             session.save_incident_event(
                 incident.set_status(

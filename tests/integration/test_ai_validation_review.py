@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from review_ai_branch_checks import candidate, verdict, response, client_with_response
+from review_ai_branch_fixtures import candidate, verdict, response, client_with_response
 from ai_validation.llm_client import build_prompt
 from application import App
 from feed import SqliteFeed, LeaseLostError
