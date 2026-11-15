@@ -2,7 +2,7 @@
 
 Инструкция для ИИ-агентов (и людей), работающих с репозиторием **sentinel_key** — системой поиска секретов в Git-репозиториях и их истории.
 
-> Прочитай файл целиком до первого изменения. Источники истины: `docs/models.md` (модели и поля), `docs/modules.md` (модули), `docs/design.md` (исходный дизайн-док). При расхождении кода и документации сначала исправляется документация, затем код.
+> Прочитай файл целиком до первого изменения. Источники истины: `docs/models.md` (модели и поля), `docs/modules.md` (модули). При расхождении кода и документации сначала исправляется документация, затем код.
 
 ## 1. Что делает система
 
@@ -20,27 +20,48 @@ Git → diff (добавленные строки) → preprocessor (RawCandidat
 
 ## 2. Стек и окружение
 
-> **Статус: проект на стадии проектирования.** Кода, `pyproject.toml` и выбранных библиотек пока нет.
+> **Статус: активная разработка.** `pyproject.toml` существует, зависимости закреплены.
 
-**Решено (из дизайн-дока)**
+**Решено**
 - Python **3.11+**.
 - `asyncio` для I/O; CPU-bound операции (энтропия и т.п.) — `ThreadPoolExecutor` / `asyncio.to_thread`.
-- Целевое хранилище — SQLite (для самого раннего прототипа допустимо временное упрощение, но модели и схема проектируются под SQLite).
+- Целевое хранилище — SQLite.
 - Git вызывается как внешний процесс через `asyncio.create_subprocess_exec` (без `shell=True`).
+- Зависимости: `openai>=3.45,<4` (production), `pytest>=9.2,<10` и `pytest-asyncio>=1.4,<2` (dev). Backend — `hatchling`, src-layout.
+- Тест-раннер: `pytest`. Real-LLM тесты не входят в CI; запускаются вручную с `SENTINEL_KEY_RUN_REAL_LLM=1` и `SENTINEL_KEY_LLM_API_KEY`.
 
 **Не выбрано (не предполагай, не добавляй молча)**
-- драйвер SQLite и способ доступа из `asyncio`, менеджер зависимостей, структура `pyproject.toml`;
-- LLM-провайдер, модель и клиент;
-- фреймворк тестов и инструменты качества (кандидаты: `pytest`, `pytest-asyncio`, `ruff`, `mypy`);
+- LLM-провайдер, модель и клиент (за интерфейсом `LlmClient`);
 - способ запуска демонов и интерфейс запуска анализа (CLI/API).
 
-**Правила, пока стек не утверждён**
+**Правила**
 1. Не добавляй сторонние зависимости без согласования. Если без библиотеки не обойтись — опиши выбор (варианты, плюсы/минусы) в `docs/decisions/NNNN-*.md` и дождись решения.
 2. Предпочитай стандартную библиотеку.
 3. Пиши код за интерфейсами (`Feed`, `LlmClient`, `Notifier`, `Storage`), чтобы выбор библиотеки не размазался по проекту.
-4. Не создавай `pyproject.toml`, CI и конфиги линтеров по своей инициативе — это отдельная задача «bootstrap проекта».
 
-**Команды.** Единых команд сборки, запуска и тестов пока нет; раздел заполняется после bootstrap-задачи.
+**Команды.**
+```powershell
+# Установка (dev)
+pip install -e ".[dev]"
+
+# Unit-тесты
+$env:PYTHONPATH = "src"
+python -m pytest tests/unit -ra
+
+# Integration-тесты (SQLite)
+python -m pytest tests/integration/test_ai_worker_sqlite.py -q -ra
+
+# Smoke-тест
+python -m tests.smoke_scan
+
+# Проверка компиляции
+python -m compileall -q src tests
+
+# Real-LLM (opt-in, ручной запуск)
+$env:SENTINEL_KEY_RUN_REAL_LLM = "1"
+$env:SENTINEL_KEY_LLM_API_KEY = "<your-key>"
+python -m pytest tests/integration/test_real_llm.py -q -ra
+```
 
 ## 3. Структура репозитория
 
@@ -48,7 +69,6 @@ Git → diff (добавленные строки) → preprocessor (RawCandidat
 sentinel_key/
   AGENTS.md
   docs/
-    design.md          # исходный дизайн-док
     models.md          # модели и поля
     modules.md         # модули и компоненты
     git_collector.md   # контракт и бэкенды git_collector

@@ -10,6 +10,8 @@ if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 from models import (
+    AiValidationOutput,
+    AiValidationPayload,
     CommitAnalysisPayload,
     InvalidTransition,
     ScanTaskPayload,
@@ -40,10 +42,14 @@ class TaskDefaultsTests(unittest.TestCase):
         self.assertIsNone(task.id)
         self.assertEqual(task.run_id, task.id)
 
-    def test_ai_validation_kind_reserved_not_registered(self) -> None:
+    def test_ai_validation_kind_registered(self) -> None:
         self.assertEqual(int(TaskKind.AI_VALIDATION), 3)
-        with self.assertRaises(KeyError):
-            spec_for(TaskKind.AI_VALIDATION)
+        spec = spec_for(TaskKind.AI_VALIDATION)
+        self.assertEqual(spec.kind, TaskKind.AI_VALIDATION)
+        self.assertEqual(spec.payload_type, AiValidationPayload)
+        self.assertEqual(spec.output_type, AiValidationOutput)
+        self.assertEqual(spec.default_priority, 50)
+        self.assertEqual(spec.default_max_attempts, 5)
 
     def test_commit_idempotency_ignores_order(self) -> None:
         a = Task.commit_analysis(

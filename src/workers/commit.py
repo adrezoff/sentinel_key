@@ -207,6 +207,11 @@ class CommitWorker:
                     for candidate in item.candidates:
                         saved = session.save_candidate(candidate)
                         candidates_total += 1
+                        # Если AI включен и кандидат имеет маршрут SUSPICIOUS (был создан без AI),
+                        # обновляем маршрут на AI_VALIDATION и создаём AI-задачу.
+                        if ai_enabled and candidate.route is Route.AI_VALIDATION and saved.route is Route.SUSPICIOUS:
+                            saved.route = Route.AI_VALIDATION
+                            session.update_candidate_route(saved.id, Route.AI_VALIDATION)
                         if saved.route is Route.SUSPICIOUS:
                             suspicious += 1
                         if (
@@ -223,9 +228,12 @@ class CommitWorker:
                             if queued.id is None:
                                 raise ValueError("AI task id is required after save")
                             ai_task_ids.append(queued.id)
-                        incident = self.incident_manager.process(session, saved)
-                        if incident is not None and incident.id not in incident_ids:
-                            incident_ids.append(incident.id)
+                        # Локальное решение об инциденте только если AI отключен.
+                        # Если AI включен — AI worker вызовет incident_manager с вердиктом.
+                        if not ai_enabled:
+                            incident = self.incident_manager.process(session, saved)
+                            if incident is not None and incident.id not in incident_ids:
+                                incident_ids.append(incident.id)
                     commit.mark_processed(
                         now=utc_now(), task_id=task.id, scan_run_id=task.run_id
                     )

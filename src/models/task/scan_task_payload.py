@@ -35,7 +35,7 @@ class ScanTaskPayload:
     batch_size: int = 50
     refs: list[str] = field(default_factory=_default_refs)
     target_shas: list[str] = field(default_factory=list)
-    ai_enabled: bool = True
+    ai_enabled: bool = False
     planned_commits_total: int | None = None
     planned_commits_new: int | None = None
 

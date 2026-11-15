@@ -51,7 +51,7 @@ flowchart LR
 **Как устроен.**
 - Один файл — одна модель внутри подпакета; enum, принадлежащий только этой модели, лежит в её файле.
 - В моделях живёт только **поведение, зависящее от самой модели**: проверка переходов (`Task.transition`, `Incident.set_status`), расчёт `ScoreBreakdown.total`, `Task.schedule_retry`. Ни SQL, ни сети, ни чтения конфигурации.
-- `TaskKind.AI_VALIDATION` зарезервирован (значение 3). Классы `AiVerdict`, `AiValidationPayload`, `AiValidationOutput` и регистрация kind — зона ответственности трека `ai_validation` (пока отсутствуют).
+- `TaskKind.AI_VALIDATION` зарезервирован (значение 3). Классы `AiVerdict`, `AiValidationPayload`, `AiValidationOutput` и регистрация kind — реализованы в модуле `ai_validation` (этап 4 плана).
 - Любое изменение полей начинается с `docs/models.md`.
 
 ---
@@ -241,7 +241,7 @@ commit_ids → git_collector.get_diff → diff_queue(maxsize)
 
 **Фиксация результата — одна транзакция:**
 1. `Candidate` с `route ∈ {SUSPICIOUS, AI_VALIDATION}` → upsert в `candidates` по `UNIQUE(commit_id, file_path, line_number, value_fingerprint)`;
-2. для `route = AI_VALIDATION` при `ai_enabled` → `Task(AI_VALIDATION)` в ленту (идемпотентно по `candidate_id + prompt_version`);
+2. для `route = AI_VALIDATION` при `ai_enabled` → `Task(AI_VALIDATION)` в ленту (идемпотентно по `candidate_id + prompt_version`); ранее сохранённый `SUSPICIOUS`-кандидат при целевом AI-пересканировании обновляется до `AI_VALIDATION`;
 3. прямые инциденты по `trusted_formats` — через `incident_manager`;
 4. успешные коммиты → `PROCESSED` (+`processed_at`, `scan_run_id`, `last_task_id`), неуспешные → `FAILED` (+`error_code`);
 5. `TaskResult(CommitAnalysisOutput)`.
@@ -275,9 +275,17 @@ commit_ids → git_collector.get_diff → diff_queue(maxsize)
 3. Собрать prompt. System: роль security-классификатора, определение секрета, явный список типичных false positive (UUID, hash, timestamps, тестовые данные, placeholders, публичная конфигурация, обычные случайные строки), требование строго структурированного JSON. User (динамически): repository, commit, file, line, masked code, context, token, entropy, regex matches.
 4. Вызвать `LlmClient` (интерфейс; в тестах — фейк) под `Semaphore` и с таймаутом.
 5. **Разобрать и провалидировать** JSON → `AiVerdict` (типы, `confidence ∈ [0,1]`, enum). Невалидный ответ → `LLM_INVALID_RESPONSE` (retry), а не «не секрет».
-6. В одной транзакции: `AiVerdict` + вызов `incident_manager` + `TaskResult(AiValidationOutput)`.
+6. В одной транзакции: `AiVerdict` + вызов `incident_manager` + `TaskResult(AiValidationOutput)`; перед записью проверяются владелец и поколение аренды (`lease_owner`, `attempts`), поэтому поздний ответ старой попытки отбрасывается.
 
 **Ошибки и ретраи.** Сеть, 429, 5xx, таймаут, невалидный JSON → `retryable`; backoff 1→2→4→8 с до `max_attempts = 5`; затем `FAILED(LLM_FAILED)`: кандидат остаётся без вердикта, запуск получает `PARTIAL`, остальное не затронуто. Новый `prompt_version` даёт новый `idempotency_key`, поэтому переанализ возможен вручную.
+
+При окончательной ошибке LLM AI worker применяет локальную политику trusted formats
+через callback `Feed.fail(..., side_effects=...)`. Callback выполняется только при
+терминальном FAILED, в одной транзакции с ошибкой и TaskResult; при retry,
+потере аренды и отмене инцидент не создаётся. Существующий вердикт кандидата
+имеет приоритет над локальным fallback.
+Повторный анализ повышает сохранённый SUSPICIOUS до AI_VALIDATION только если
+этот маршрут вычислен текущим статическим анализом.
 
 **Приватность.** `ai.enabled = false` полностью отключает отправку: AI-задачи не создаются, инциденты возможны только по `trusted_formats`. Модель и версия prompt'а сохраняются в `AiVerdict` для аудита.
 
@@ -320,7 +328,7 @@ still_in_head=None)` выполняется синхронно внутри `Sto
 - Версионирование схемы (миграции).
 - Составные транзакционные операции (единица атомарности):
   - `commit_analysis_done(task, candidates, ai_tasks, commit_updates, direct_incidents, result)`;
-  - `ai_validation_done(task, verdict, incident_changes, outbox, result)`;
+  - `ai_validation_done(task, verdict, incident_changes, result_factory, worker_id)`;
   - `run_finalized(root_task, summary, repository_update)`.
 - Сырые значения секретов в БД не хранятся; ключ HMAC живёт вне БД.
 
@@ -335,9 +343,8 @@ still_in_head=None)` выполняется синхронно внутри `Sto
 Схема создаётся версионируемыми SQL-миграциями из `storage/migrations/`.
 `SqliteStorage.initialize()` применяет ещё не выполненные миграции, включает
 `foreign_keys`, `busy_timeout` и WAL для файловой БД. Слой предоставляет
-преобразование всех уже реализованных сохраняемых моделей; таблица
-`ai_verdicts` создаётся миграцией, а типизированный mapper будет добавлен вместе
-с доменной моделью `AiVerdict` в треке `ai_validation`.
+преобразование всех уже реализованных сохраняемых моделей, включая
+`AiVerdict` (мапперы `save_ai_verdict`, `get_ai_verdict`, `get_ai_verdict_by_candidate`, `get_ai_verdict_by_task` в `StorageSession` и публичные async-методы в `SqliteStorage`).
 
 ---
 
@@ -348,10 +355,10 @@ still_in_head=None)` выполняется синхронно внутри `Sto
 `IncidentManager`. При вызове `scan(...)` регистрирует локальный репозиторий,
 создаёт новый корневой запуск или возобновляет активный, планирует и выполняет
 задачи до итогового `TaskResult`. Перед циклом перевыдаёт задачи с истёкшей
-арендой. HMAC-ключ передаётся явно и не сохраняется; `ai_enabled=false` обязателен
-в MVP. CLI `python -m application scan` читает ключ из environment и выводит
-только id запуска, outcome и агрегированные счётчики. Пауза между проверками
-пустой ленты задаётся `poll_interval_s` (по умолчанию 0.25 с).
+арендой. HMAC-ключ передаётся явно и не сохраняется. CLI `python -m application scan`
+читает ключ из environment и выводит только id запуска, outcome и агрегированные
+счётчики. Поддерживает флаг `--ai-enabled` для включения AI-валидации.
+Пауза между проверками пустой ленты задаётся `poll_interval_s` (по умолчанию 0.25 с).
 
 ## 13. `observability/` — логи и метрики
 

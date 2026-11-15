@@ -1,14 +1,29 @@
 # sentinel_key
 
+Система асинхронного поиска секретов в Git-репозиториях и их историях.
+Локальные детекторы (регулярные выражения, энтропия Шеннона, контекстный
+анализ) отбирают кандидатов, после чего при необходимости выполняется
+дополнительная AI-валидация через LLM. Сырые значения секретов в хранилище
+не попадают — только маскированные значения и HMAC-отпечатки.
+
+Pipeline:
+```
+Git → diff → preprocessor (RawCandidate) → static_analyzer (regex/энтропия/контекст → score → route)
+    → route: IGNORE | SUSPICIOUS | AI_VALIDATION → ai_validation (вердикт LLM) → incident_manager (Incident)
+```
+
 ## Первый запуск
-1. Установлены Python 3.11+ и Git; PowerShell открыт в корне `sentinel_key`.
-2. Вместо `C:\path\to\project` указан путь к локальному Git-репозиторию.
-3. Выполнены три команды:
+
+Требуются Python 3.11+ и установленный `git`.
+
+1. Откройте PowerShell в корне `sentinel_key`.
+2. Укажите путь к локальному Git-репозиторию вместо `C:\path\to\project`.
+3. Сгенерируйте HMAC-ключ и запустите сканирование:
 
 ```powershell
 $env:PYTHONPATH = "src"
-$env:SENTINEL_KEY_HMAC_KEY_B64 = py -3 -c "import base64,secrets; print(base64.b64encode(secrets.token_bytes(32)).decode())"
-py -3 -m application scan --repository "C:\path\to\project" --database "var\sentinel_key.db"
+$env:SENTINEL_KEY_HMAC_KEY_B64 = python -c "import base64,secrets; print(base64.b64encode(secrets.token_bytes(32)).decode())"
+python -m application scan --repository "C:\path\to\project" --database "var\sentinel_key.db"
 ```
 
 Перед закрытием терминала сохраните HMAC-ключ из переменной
@@ -17,46 +32,98 @@ py -3 -m application scan --repository "C:\path\to\project" --database "var\sent
 автоматически; отдельная команда инициализации не нужна. Успешный запуск
 печатает `outcome=OK` и суммарные счётчики.
 
-Система асинхронного поиска секретов в Git-репозиториях и их истории. Локальные
-детекторы отбирают кандидатов, после чего при необходимости выполняется
-дополнительная AI-валидация; сырые значения секретов в хранилище не попадают.
+## Запуск без AI (только локальные детекторы)
 
-
-## Запуск на локальном проекте
-
-Из корня `sentinel_key` задайте путь к исходникам и **постоянный** HMAC-ключ
-в environment. Ключ создаётся один раз; сохраните его в менеджере секретов и
-используйте при следующих запусках с этой базой (см. раздел «Предобработка
-diff»). Затем запустите:
+AI-валидация выключена по умолчанию. Запуск использует только локальные
+детекторы (regex, энтропия, контекст). Подозрительные кандидаты сохраняются
+как `SUSPICIOUS`, инциденты открываются для trusted форматов.
 
 ```powershell
 $env:PYTHONPATH = "src"
-$env:SENTINEL_KEY_HMAC_KEY_B64 = "<ваш ранее сохранённый base64-ключ>"
-py -3.14 -m application scan --repository "C:\path\to\project" --database "var/sentinel_key.db"
+$env:SENTINEL_KEY_HMAC_KEY_B64 = "<ваш HMAC-ключ>"
+python -m application scan --repository "C:\path\to\project" --database "var/sentinel_key.db"
 ```
 
-Требуются Python 3.11+ и установленный `git`. Для другого интерпретатора
-замените `py -3.14` на `python`. По умолчанию сканируются все refs (`--all`):
-первый запуск проходит историю, следующие обрабатывают новые и ранее
-неуспешные SHA. База и результаты сохраняются по указанному пути; повторный
-вызов возобновляет незавершённый запуск. В MVP работает только локальный Git,
-AI выключен.
+## Запуск с AI-валидацией (LLM)
 
-Варианты: `--ref main` для выбранного ref, `--batch-size 20` для размера пачки,
-`--mode targeted --target-sha <полный SHA>` для повторного анализа конкретного
-коммита. Команда печатает только id запуска, `outcome` и суммарные счётчики;
-значения кандидатов в вывод не попадают. Код выхода: `0` для `OK`, `2` для
-`PARTIAL` или ошибки параметров, `1` для `FAILED` или ошибки запуска.
+Для включения LLM-компонента передайте флаг `--ai-enabled` и задайте
+API-ключ NVIDIA Nemotron через переменную окружения:
 
-Из Python:
+```powershell
+$env:PYTHONPATH = "src"
+$env:SENTINEL_KEY_HMAC_KEY_B64 = "<ваш HMAC-ключ>"
+$env:SENTINEL_KEY_LLM_API_KEY = "<ваш ключ NVIDIA Nemotron>"
+python -m application scan --repository "C:\path\to\project" --database "var/sentinel_key.db" --ai-enabled
+```
+
+При `ai_enabled=true` candidates с высоким баллом (`route = AI_VALIDATION`)
+отправляются в LLM через `AiWorker` с семафором параллелизма, таймаутом и
+ретряями. Перед отправкой в LLM применяется masking guard — сырые значения
+секретов не покидают память процесса. В LLM уходят только маскированные
+данные (`AKIA...MPLE`).
+
+Если LLM недоступен, задача уходит в retry, затем `FAILED`; запуск
+завершается с `Outcome=PARTIAL`, но локальные детекторы продолжают работать.
+
+## Параметры CLI
+
+```
+python -m application scan --repository <путь> --database <путь к БД>
+    [--mode incremental|full|targeted] [--ref main] [--batch-size 20]
+    [--target-sha <SHA>] [--ai-enabled] [--poll-interval 0.25]
+```
+
+- `--mode` — режим сканирования: `incremental` (по умолчанию), `full`,
+  `targeted`.
+- `--ref` — Git ref для сканирования (можно повторять, по умолчанию `--all`).
+- `--batch-size` — размер пачки коммитов (по умолчанию 50).
+- `--target-sha` — явный список SHA для режима `targeted`.
+- `--ai-enabled` — включить AI-валидацию через LLM (по умолчанию `false`).
+- `--poll-interval` — пауза между проверками пустой ленты (по умолчанию 0.25 с).
+
+Команда печатает только id запуска, `outcome` и суммарные счётчики;
+значения кандидатов в вывод не попадают.
+Код выхода: `0` для `OK`, `2` для `PARTIAL`, `1` для `FAILED`.
+
+## Observability — логи и метрики
+
+Логирование структурированное (JSON), без хранения сырых секретов. Метрики — in-memory, Prometheus-совместимые.
+
+### Логи
+
+Все логи выводятся через `StructuredFormatter` (JSON) с обязательными полями: `task_id`, `run_id`, `commit_id`, `candidate_id`. Сырые секреты маскируются (`AKIA***MASKED***`, `ghp_***MASKED***`, `JWT.***MASKED***`).
 
 ```python
-from application import App
-from models import ScanTaskPayload
+from observability import configure_logging, get_logger
 
-async with App("var/sentinel_key.db", fingerprint_key) as app:
-    result = await app.scan("C:/path/to/project", ScanTaskPayload(ai_enabled=False))
+configure_logging(level=logging.INFO, json_output=True)
+logger = get_logger("sentinel_key", context=LogContext(task_id=1, run_id=2))
+logger.info("Candidate processed", candidate_id=5)
 ```
+
+### Метрики
+
+Доступны через `MetricsCollector` с высокоуровневыми бизнес-метриками (`BusinessMetrics`):
+
+```python
+from observability import get_metrics
+
+m = get_metrics()
+m.inc("commits_processed_total")
+m.observe("llm_latency_seconds", 0.5, labels={"model": "nemotron"})
+snap = m.snapshot()
+```
+
+Бизнес-метрики:
+- `commits_processed_total` — счётчик обработанных коммитов
+- `lines_processed_total` — счётчик обработанных строк
+- `candidates_found_total{route="..."}` — кандидаты по маршруту (IGNORE/SUSPICIOUS/AI_VALIDATION)
+- `llm_calls_total{model="...",success="true/false"}` — вызовы LLM
+- `llm_latency_seconds{model="..."}` — гистограмма задержек LLM
+- `incidents_opened_total{severity="..."}` — открытые инциденты
+- `incidents_closed_total{severity="..."}` — закрытые инциденты
+- `task_retries_total{kind="...",retryable="true/false"}` — ретраи задач
+- `lease_expired_total{kind="..."}` — истёкшие аренды
 
 ## Как вести разработку
 
@@ -293,14 +360,43 @@ AI и регистрации этого вида задачи. CLI запуск�
 репозитория выполните:
 
 ```powershell
-py -3.14 -m tests.smoke_scan
+python -m tests.smoke_scan
 ```
-
-Если установлен другой Python 3.11+, используйте `python -m tests.smoke_scan`.
 Скрипт создаёт временный Git-репозиторий с сгенерированным значением, запускает
 orchestrator и commit worker с временной SQLite-базой, затем повторяет scan.
 Ожидаемый вывод: `SMOKE OK: commits_done=1, candidates=…, repeat_new=0`, где
 `candidates` больше нуля. Временные файлы удаляются после проверки.
 
+## Запуск тестов
+
+Фреймворк: `pytest` (dev-зависимость). Все тесты запускаются с `PYTHONPATH=src`.
+
+```powershell
+# Установка зависимостей (dev)
+pip install -e ".[dev]"
+
+# Все unit-тесты
+$env:PYTHONPATH = "src"
+python -m pytest tests/unit -ra
+
+# Integration-тесты (SQLite, AI worker)
+python -m pytest tests/integration/test_ai_worker_sqlite.py -q -ra
+
+# Smoke-тест
+python -m tests.smoke_scan
+
+# Проверка компиляции
+python -m compileall -q src tests
+
+# Real-LLM тесты (opt-in, требуют внешнюю сеть и API-ключ)
+$env:SENTINEL_KEY_RUN_REAL_LLM = "1"
+$env:SENTINEL_KEY_LLM_API_KEY = "<your-api-key>"
+python -m pytest tests/integration/test_real_llm.py -q -ra
+```
+
+Ожидаемый вывод unit-тестов: `125 passed, 6 subtests passed`.
+
 Для встраивания доступен `App` из `src/application.py`; он связывает те же
 модули и возвращает `TaskResult` после завершения дерева задач.
+
+> **Примечание:** Real-LLM тесты (`test_real_llm.py`) требуют валидный API-ключ NVIDIA Nemotron с доступом к модели `nvidia/nemotron-3-ultra-550b-a55b` на эндпоинте `https://integrate.api.nvidia.com/v1`. При неверных учётных данных тесты могут падать с ошибкой аутентификации.

@@ -7,11 +7,10 @@
 * ``task`` — лента задач, payload, результаты
 * ``candidate`` — RawCandidate, Candidate, scoring VO
 * ``incident`` — Incident, Occurrence, события, outbox
-
-AI-модели (``AiVerdict``, payload/output ``AI_VALIDATION``) принадлежат треку
-ai_validation и в этом пакете пока отсутствуют.
+* ``ai_validation`` — AiVerdict, AiValidationPayload, AiValidationOutput
 """
 
+from .ai_validation import AiValidationOutput, AiValidationPayload, AiVerdict
 from .candidate import Candidate, RawCandidate, Route, ScoreBreakdown
 from .enums import DetectorFlags, SecretType, Severity
 from .exceptions import InvalidTransition
@@ -51,6 +50,9 @@ from .task import (
 )
 
 __all__ = [
+    "AiValidationOutput",
+    "AiValidationPayload",
+    "AiVerdict",
     "Candidate",
     "Commit",
     "CommitAnalysisOutput",

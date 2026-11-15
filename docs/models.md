@@ -2,7 +2,7 @@
 
 Исходники моделей: `sentinel_key/src/models/` — **один файл на одну модель** (класс), сгруппированы по подпакетам `repository` / `task` / `candidate` / `incident` (+ `common`). Этот документ — источник истины: код моделей пишется по нему, изменения моделей начинаются с правки документа.
 
-> **Статус реализации.** Модели `AiVerdict`, `AiValidationPayload`, `AiValidationOutput` описаны здесь полностью, но в коде их добавляет трек `ai_validation`. Значение `TaskKind.AI_VALIDATION = 3` уже зарезервировано.
+> **Статус реализации.** Модели `AiVerdict`, `AiValidationPayload`, `AiValidationOutput` реализованы в `src/models/ai_validation/` и зарегистрированы в `TaskKind` (значение 3).
 
 ## 1. Соглашения
 
@@ -444,6 +444,12 @@ stateDiagram-v2
 1. **Есть `AiVerdict` → он финальный.** `is_secret = true` и `confidence ≥ policy.min_ai_confidence` → инцидент. Иначе — нет (вердикт может быть «вето» даже при сильном regex).
 2. **Нет вердикта** (LLM выключена/недоступна) → инцидент только если одновременно: `secret_type ∈ policy.trusted_formats`, `score_total ≥ policy.min_local_score`, `is_test_context = false`.
 3. Иначе кандидат остаётся `SUSPICIOUS`/`AI_VALIDATION` без инцидента.
+
+Вердикт относится к конкретному кандидату. Отрицательный вердикт закрывает
+активный инцидент как FALSE_POSITIVE только при отсутствии других действующих
+подтверждений: для каждого occurrence учитывается последний вердикт кандидата,
+а при его отсутствии — локальная политика trusted formats. История occurrences
+и вердиктов сохраняется для аудита.
 
 **Severity:** базовая — из вердикта (локальный путь — `HIGH`); при `still_in_head = true` и `policy.bump_if_in_head` повышается на один уровень (не выше `CRITICAL`) и не понижается.
 

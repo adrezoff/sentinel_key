@@ -1,6 +1,11 @@
 """Хранилище: SQLite-схема, миграции и атомарные транзакции."""
 
-from .exceptions import ConcurrentUpdateError, StorageError, StorageNotInitializedError
+from .exceptions import (
+    ConcurrentUpdateError,
+    StorageError,
+    StorageNotInitializedError,
+    TaskLeaseLostError,
+)
 from .protocol import Storage
 from .session import StorageSession
 from .sqlite import SqliteStorage
@@ -12,4 +17,5 @@ __all__ = [
     "StorageError",
     "StorageNotInitializedError",
     "StorageSession",
+    "TaskLeaseLostError",
 ]

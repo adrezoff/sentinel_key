@@ -39,7 +39,7 @@ class Feed(Protocol):
         """Атомарно завершить задачу, результат и связанные записи."""
         ...
 
-    async def fail(self, task: Task, error: TaskError) -> None:
+    async def fail(self, task: Task, error: TaskError, side_effects: SideEffects | None = None) -> None:
         """Зафиксировать ошибку, запланировав retry либо окончательный провал."""
         ...
 

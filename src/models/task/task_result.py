@@ -7,13 +7,14 @@ from datetime import datetime
 from enum import IntEnum
 from typing import Union
 
+from ..ai_validation.ai_validation_output import AiValidationOutput
 from ..common.clock import utc_now
 from .commit_analysis_output import CommitAnalysisOutput
 from .scan_summary import ScanSummary
 from .task_error import ErrorCode, TaskError
 
 # AiValidationOutput появится в треке ai_validation вместе с регистрацией kind.
-TaskOutput = Union[ScanSummary, CommitAnalysisOutput]
+TaskOutput = Union[ScanSummary, CommitAnalysisOutput, AiValidationOutput]
 
 
 class Outcome(IntEnum):

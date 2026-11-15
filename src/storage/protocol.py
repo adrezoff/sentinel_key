@@ -26,3 +26,14 @@ class Storage(Protocol):
     async def read(self, operation: Callable[[Any], T]) -> T:
         """Выполнить короткую операцию чтения без блокировки записи."""
         ...
+
+    async def ai_validation_done(
+        self,
+        task: Any,
+        verdict: Any,
+        incident_changes: Callable[[Any, Any], Any],
+        result_factory: Callable[[Any, Any], Any],
+        worker_id: str,
+    ) -> Any:
+        """Атомарно сохранить вердикт, изменения инцидента и результат AI-задачи."""
+        ...
