@@ -1,6 +1,6 @@
 # Git Collector
 
-Модуль `src/git_collector/`. Краткое описание в [`modules.md`](modules.md) §3; здесь — контракт, бэкенды и правила расширения.
+Модуль `src/git_collector/`. Краткое описание в [`modules.md`](modules.md); здесь — контракт, бэкенды и правила расширения.
 
 ## Зачем
 
@@ -105,7 +105,7 @@ TTL зеркала и паузы хоста хранятся атомарно в
 | Auth / clone URL | путь на диске | публичный HTTP(S) clone URL |
 | Обновление зеркала | не нужно | `clone` / `fetch` + mirror path |
 | Список refs для FULL/INCREMENTAL | `rev-list` | то же на mirror |
-| Targeted scan (webhook) | SHA из payload | то же; payload приходит из API платформы |
+| Targeted scan | SHA из payload | то же; SHA задаёт вызывающий код |
 | Diff / history | `git` | **тот же** `LocalGitCollector` на mirror |
 
 Рекомендуемый паттерн адаптера:
@@ -124,10 +124,14 @@ TTL зеркала и паузы хоста хранятся атомарно в
 
 ## Конфигурация
 
-`GitCollectorConfig` (frozen) живёт в модуле; значения по умолчанию согласованы с [`modules.md`](modules.md) §2. Глобальный loader конфигурации позже прокинет поля сюда — коллектор не читает файлы и env сам (кроме того, что передаст вызывающий код в адаптеры GitHub/GitLab).
+`GitCollectorConfig` (frozen) живёт в модуле; значения передаются вызывающим кодом. Общего загрузчика файлов конфигурации нет; коллектор не читает application environment сам.
 
 | Настройка | По умолчанию | Назначение |
 |---|---|---|
+| `max_file_bytes` | 1048576 | Максимальный размер файла |
+| `git_workers` | 4 | Лимит процессов на экземпляр |
+| `command_timeout_s` | 120 | Таймаут локальной Git-команды, с |
+| `git_executable` | `git` | Исполняемый файл |
 | `remote_cache_ttl_s` | 300 | Минимальный интервал обновления одного зеркала |
 | `remote_host_interval_s` | 60 | Пауза между сетевыми операциями одного хоста |
 | `remote_failure_cooldown_s` | 900 | Пауза хоста после ошибки/отмены |

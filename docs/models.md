@@ -1,6 +1,6 @@
 # Модели данных sentinel_key
 
-Исходники моделей: `sentinel_key/src/models/` — **один файл на одну модель** (класс), сгруппированы по подпакетам `repository` / `task` / `candidate` / `incident` (+ `common`). Этот документ — источник истины: код моделей пишется по нему, изменения моделей начинаются с правки документа.
+Исходники моделей: `sentinel_key/src/models/` — **один файл на одну модель** (класс), сгруппированы по подпакетам `repository` / `task` / `candidate` / `incident` и `ai_validation` (+ `common`). Этот документ — источник истины: код моделей пишется по нему, изменения моделей начинаются с правки документа.
 
 > **Статус реализации.** Модели `AiVerdict`, `AiValidationPayload`, `AiValidationOutput` реализованы в `src/models/ai_validation/` и зарегистрированы в `TaskKind` (значение 3).
 
@@ -509,6 +509,19 @@ stateDiagram-v2
 
 ---
 
+### 3.13. `TaskKindSpec` — реестр задач
+
+Внутренняя спецификация в `models/task/task_kinds.py`, без таблицы и сериализации.
+Реестр связывает kind с классами payload/output и настройками создания Task.
+
+| Поле | Python-тип | Тип в БД | Назначение |
+|---|---|---|---|
+| `kind` | `TaskKind` | — | Зарегистрированный вид задачи |
+| `payload_type` | `type` | — | Класс payload |
+| `output_type` | `type \| None` | — | Класс результата |
+| `default_priority` | `int` | — | Приоритет новой задачи |
+| `default_max_attempts` | `int` | — | Лимит попыток новой задачи |
+
 ## 4. Конфигурационные модели (не персистятся)
 
 Загружаются из конфигурации, неизменяемы (`frozen`).
@@ -559,37 +572,10 @@ stateDiagram-v2
 
 ## 5. Моделирование запуска анализа
 
-Запуск — корневая `Task(kind=REPOSITORY_SCAN)`. Всё, что происходит в его рамках, связано через `root_task_id`.
-
-```mermaid
-sequenceDiagram
-    participant U as Пользователь / cron / webhook
-    participant F as Лента (tasks)
-    participant O as Оркестратор
-    participant C as Commit worker
-    participant A as AI worker
-    participant I as Incident manager
-
-    U->>F: INSERT REPOSITORY_SCAN (mode)
-    F->>O: claim run
-    O->>O: rev-list → INSERT commits (PENDING), выбор PENDING/FAILED
-    O->>F: INSERT COMMIT_ANALYSIS × N (commit_ids)
-    O->>F: run → WAITING_CHILDREN
-    F->>C: claim COMMIT_ANALYSIS
-    C->>C: diff → RawCandidate → Candidate (regex/entropy/score)
-    C->>F: TX: candidates + AI_VALIDATION tasks + commits PROCESSED + TaskResult
-    F->>A: claim AI_VALIDATION
-    A->>A: mask → LLM → AiVerdict
-    A->>I: (candidate, verdict)
-    I->>F: TX: Incident/Occurrence/Event/Outbox + AiVerdict + TaskResult
-    F->>O: все задачи run терминальны
-    O->>F: run → SUCCEEDED / FAILED + ScanSummary
-```
-
-- **Режимы.** `FULL` — выбирается автоматически, если в `commits` для репозитория нет `PROCESSED`; `INCREMENTAL` — всё, что не `PROCESSED`; `TARGETED` — явный список.
-- **Завершение.** Корень остаётся в `WAITING_CHILDREN`, пока есть нетерминальные задачи с его `root_task_id`, включая `AI_VALIDATION`. Итог: все `SUCCEEDED` → `Outcome.OK`; часть `FAILED` при готовом остальном → `PARTIAL`; не удалось получить историю → `FAILED`.
-- **Когда коммит `PROCESSED`.** После локального анализа и постановки AI-задач — в одной транзакции. Судьба AI-задач на статус коммита не влияет: они долговечны и ретраятся сами.
-- **Идемпотентность.** Повторная постановка той же пачки отсекается `Task.idempotency_key`; повторный анализ коммита — `UNIQUE` на `candidates`; один и тот же секрет — `UNIQUE(repository_id, fingerprint)` на `incidents`.
+Запуск — корневая Task(kind=REPOSITORY_SCAN), потомки связаны через root_task_id.
+Планирование, режимы, момент фиксации PROCESSED и завершение описаны в
+[контракте orchestrator и App](modules.md#orchestrator-и-app), транзакции —
+в разделах [CommitWorker](modules.md#commitworker) и [AI worker](modules.md#ai-worker-и-llm).
 
 ## 6. Сводка уникальных ограничений
 

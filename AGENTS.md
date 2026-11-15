@@ -30,9 +30,10 @@ Git → diff (добавленные строки) → preprocessor (RawCandidat
 - Зависимости: `openai>=3.45,<4` (production), `pytest>=9.2,<10` и `pytest-asyncio>=1.4,<2` (dev). Backend — `hatchling`, src-layout.
 - Тест-раннер: `pytest`. Real-LLM тесты не входят в CI; запускаются вручную с `SENTINEL_KEY_RUN_REAL_LLM=1` и `SENTINEL_KEY_LLM_API_KEY`.
 
-**Не выбрано (не предполагай, не добавляй молча)**
-- LLM-провайдер, модель и клиент (за интерфейсом `LlmClient`);
-- способ запуска демонов и интерфейс запуска анализа (CLI/API).
+**Текущая реализация**
+- CLI: `python -m application scan`; параметры описаны в `README.md`.
+- `RealLlmClient` за интерфейсом `LlmClient` использует OpenAI-совместимый API; значения по умолчанию и окружение — в `docs/operations.md`.
+- Общий менеджер демонов и API запуска не реализованы.
 
 **Правила**
 1. Не добавляй сторонние зависимости без согласования. Если без библиотеки не обойтись — опиши выбор (варианты, плюсы/минусы) в `docs/decisions/NNNN-*.md` и дождись решения.
