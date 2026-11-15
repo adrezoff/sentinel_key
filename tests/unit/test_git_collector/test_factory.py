@@ -51,11 +51,11 @@ class InferSourceKindTests(unittest.TestCase):
 
 class FactoryTests(unittest.TestCase):
     def test_explicit_github(self) -> None:
-        collector = create_git_collector("ignored", kind=SourceKind.GITHUB)
+        collector = create_git_collector("https://github.com/org/repo.git", kind=SourceKind.GITHUB)
         self.assertIsInstance(collector, GitHubCollector)
 
     def test_explicit_gitlab(self) -> None:
-        collector = create_git_collector("ignored", kind=SourceKind.GITLAB)
+        collector = create_git_collector("https://gitlab.com/org/repo.git", kind=SourceKind.GITLAB)
         self.assertIsInstance(collector, GitLabCollector)
 
     def test_local_requires_existing_path(self) -> None:

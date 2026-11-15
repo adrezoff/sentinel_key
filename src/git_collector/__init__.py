@@ -10,6 +10,8 @@ from .github import GitHubCollector
 from .gitlab import GitLabCollector
 from .local import LocalGitCollector
 from .protocol import GitCollector
+from .remote import RemoteGitCollector
+from .remote_security import normalize_remote_url
 from .types import (
     CommitInfo,
     DiffHunk,
@@ -33,6 +35,8 @@ __all__ = [
     "GitHubCollector",
     "GitLabCollector",
     "LocalGitCollector",
+    "RemoteGitCollector",
+    "normalize_remote_url",
     "SourceKind",
     "create_git_collector",
     "infer_source_kind",

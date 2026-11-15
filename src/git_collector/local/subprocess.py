@@ -10,10 +10,15 @@ from ..errors import GitCollectorError
 
 
 class GitProcess:
-    def __init__(self, cwd: str, config: GitCollectorConfig) -> None:
+    def __init__(
+        self, cwd: str, config: GitCollectorConfig, *,
+        env: dict[str, str] | None = None, options: Sequence[str] = (),
+    ) -> None:
         self._cwd = cwd
         self._config = config
         self._semaphore = asyncio.Semaphore(config.git_workers)
+        self._env = env
+        self._options = tuple(options)
 
     async def run(self, args: Sequence[str]) -> bytes:
         async with self._semaphore:
@@ -23,8 +28,10 @@ class GitProcess:
         async with self._semaphore:
             proc = await asyncio.create_subprocess_exec(
                 self._config.git_executable,
+                *self._options,
                 *args,
                 cwd=self._cwd,
+                env=self._env,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -48,7 +55,7 @@ class GitProcess:
                     yield line
                 stderr = await proc.stderr.read()
                 code = await proc.wait()
-            except Exception:
+            except BaseException:
                 await _kill(proc)
                 raise
             if code != 0:
@@ -60,8 +67,10 @@ class GitProcess:
     async def _communicate(self, args: Sequence[str]) -> bytes:
         proc = await asyncio.create_subprocess_exec(
             self._config.git_executable,
+            *self._options,
             *args,
             cwd=self._cwd,
+            env=self._env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -75,6 +84,9 @@ class GitProcess:
             raise GitCollectorError(
                 f"git timed out after {self._config.command_timeout_s}s: git {' '.join(args)}"
             ) from exc
+        except BaseException:
+            await _kill(proc)
+            raise
         if proc.returncode != 0:
             raise GitCollectorError(
                 f"git exited with {proc.returncode}: git {' '.join(args)}",
