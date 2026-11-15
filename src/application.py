@@ -1,4 +1,4 @@
-"""Локальная точка сборки MVP и CLI для сканирования Git-репозитория."""
+"""Точка сборки и CLI для сканирования локальных и удалённых Git-репозиториев."""
 
 from __future__ import annotations
 
@@ -8,9 +8,14 @@ import base64
 import binascii
 import os
 from pathlib import Path
+from functools import partial
+from urllib.parse import urlsplit
 
 from feed import SqliteFeed
-from git_collector import LocalGitCollector
+from git_collector import (
+    GitCollectorConfig, SourceKind, create_git_collector, infer_source_kind,
+    normalize_remote_url,
+)
 from incident_manager import IncidentManager
 from models import (
     Outcome,
@@ -31,7 +36,7 @@ from ai_validation.llm_client import LlmConfig
 
 
 class App:
-    """Владеет SQLite и выполняет локальный scan до терминального результата."""
+    """Владеет SQLite и выполняет scan пути или URL до терминального результата."""
 
     def __init__(
         self,
@@ -42,6 +47,8 @@ class App:
         ai_enabled: bool = False,
         llm_config: LlmConfig | None = None,
         use_fake_llm: bool = False,
+        git_config: GitCollectorConfig | None = None,
+        git_cache: str | Path | None = None,
     ) -> None:
         if not isinstance(fingerprint_key, bytes) or len(fingerprint_key) < 32:
             raise ValueError("fingerprint_key must contain at least 32 bytes")
@@ -52,15 +59,19 @@ class App:
             resolved_llm_config = LlmConfig.from_env()
         self.storage = SqliteStorage(database)
         self.feed = SqliteFeed(self.storage)
+        self.git_config = git_config or GitCollectorConfig()
+        collector_for = partial(
+            create_git_collector, config=self.git_config, mirror_root=git_cache,
+        )
         self.orchestrator = ScanOrchestrator(
             feed=self.feed,
             storage=self.storage,
-            collector_for=LocalGitCollector,
+            collector_for=collector_for,
         )
         self.commit_worker = CommitWorker(
             feed=self.feed,
             storage=self.storage,
-            collector_for=LocalGitCollector,
+            collector_for=collector_for,
             preprocessor=Preprocessor(fingerprint_key),
             analyzer=StaticAnalyzer(),
             incident_manager=IncidentManager(),
@@ -96,16 +107,22 @@ class App:
     async def scan(
         self, repository_path: str | Path, payload: ScanTaskPayload | None = None
     ) -> TaskResult:
-        """Создать или возобновить запуск для локального Git и дождаться итога."""
+        """Зарегистрировать путь или clone URL, создать запуск и дождаться итога."""
         if not self._opened:
             raise RuntimeError("App must be opened with async with")
-        path = Path(repository_path).expanduser().resolve()
-        if not path.is_dir():
-            raise ValueError("repository path must be an existing directory")
+        source = str(repository_path)
+        if infer_source_kind(source) is SourceKind.LOCAL:
+            path = Path(source).expanduser().resolve()
+            if not await asyncio.to_thread(path.is_dir):
+                raise ValueError("repository path must be an existing directory")
+            location, name = str(path), path.name
+        else:
+            location = normalize_remote_url(source, allow_http=self.git_config.allow_http)
+            name = urlsplit(location).path.rsplit("/", 1)[-1]
         selected_payload = payload if payload is not None else ScanTaskPayload(ai_enabled=self._ai_enabled)
         repository = await self.storage.run_in_transaction(
-            lambda session: session.get_repository_by_location(str(path))
-            or session.save_repository(Repository(location=str(path), name=path.name))
+            lambda session: session.get_repository_by_location(location)
+            or session.save_repository(Repository(location=location, name=name))
         )
         root = await self.orchestrator.start_scan(repository.id, selected_payload)
 
@@ -148,11 +165,13 @@ class App:
 
 
 def _parser() -> argparse.ArgumentParser:
-    """Описать минимальный интерфейс запуска для локального Git."""
-    parser = argparse.ArgumentParser(description="Поиск секретов в локальном Git-репозитории")
+    """Описать интерфейс запуска для локального пути и удалённого clone URL."""
+    parser = argparse.ArgumentParser(description="Поиск секретов в Git-репозитории")
     commands = parser.add_subparsers(dest="command", required=True)
     scan = commands.add_parser("scan", help="Выполнить или возобновить анализ")
-    scan.add_argument("--repository", required=True, help="Путь к локальному Git-репозиторию")
+    scan.add_argument("--repository", required=True, help="Локальный путь или HTTPS clone URL")
+    scan.add_argument("--git-cache", default="var/git-mirrors", help="Общий каталог зеркал и лимитов запросов")
+    scan.add_argument("--allow-http", action="store_true", help="Разрешить незашифрованный HTTP clone URL")
     scan.add_argument("--database", default="var/sentinel_key.db", help="Путь к SQLite")
     scan.add_argument(
         "--mode", choices=("incremental", "full", "targeted"), default="incremental"
@@ -199,6 +218,8 @@ async def _run_scan(args: argparse.Namespace) -> TaskResult:
         _load_fingerprint_key(),
         ai_enabled=args.ai_enabled,
         use_fake_llm=use_fake_llm,
+        git_config=GitCollectorConfig(allow_http=args.allow_http),
+        git_cache=args.git_cache,
     ) as app:
         return await app.scan(args.repository, payload)
 

@@ -17,12 +17,18 @@ from .subprocess import GitProcess
 class LocalGitCollector:
     """Collector bound to an existing local working tree or bare repository."""
 
-    def __init__(self, location: str | Path, *, config: GitCollectorConfig | None = None) -> None:
+    def __init__(
+        self, location: str | Path, *, config: GitCollectorConfig | None = None,
+        process_env: dict[str, str] | None = None,
+        process_options: Sequence[str] = (),
+    ) -> None:
         self._config = config or GitCollectorConfig()
         self._path = Path(location).expanduser().resolve()
         if not self._path.exists():
             raise GitCollectorError(f"repository path does not exist: {self._path}")
-        self._git = GitProcess(str(self._path), self._config)
+        self._git = GitProcess(
+            str(self._path), self._config, env=process_env, options=process_options,
+        )
 
     @property
     def location(self) -> Path:

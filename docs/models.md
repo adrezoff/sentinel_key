@@ -98,7 +98,7 @@ erDiagram
 | Поле | Python-тип | Тип в БД | Ключ | Описание |
 |---|---|---|---|---|
 | `id` | `int \| None` | INTEGER | **PK** | |
-| `location` | `str` | TEXT | UQ | URL или локальный путь к репозиторию |
+| `location` | `str` | TEXT | UQ | Абсолютный локальный путь или нормализованный HTTP(S) clone URL без credentials, query и fragment; URL хранится вместо пути к кэшу |
 | `name` | `str` | TEXT | | отображаемое имя |
 | `default_ref` | `str \| None` | TEXT | | ветка/ref по умолчанию (для проверки HEAD) |
 | `created_at` | `datetime` | INTEGER | | |

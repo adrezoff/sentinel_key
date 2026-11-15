@@ -44,6 +44,35 @@ $env:SENTINEL_KEY_HMAC_KEY_B64 = "<ваш HMAC-ключ>"
 python -m application scan --repository "C:\path\to\project" --database "var/sentinel_key.db"
 ```
 
+## Удалённый Git-репозиторий
+
+В `--repository` можно передать публичный HTTPS clone URL GitHub, GitLab,
+Bitbucket или другого Git-хостинга. HMAC-ключ задаётся так же, как для локального запуска.
+
+```powershell
+python -m application scan --repository "https://github.com/OWNER/REPO.git" --git-cache "var/git-mirrors"
+```
+
+Первый запуск создаёт полное локальное зеркало без checkout и submodules;
+следующие используют кэш и `fetch`. История и diff анализируются локально,
+поэтому запросов к провайдеру на каждый коммит нет. По умолчанию зеркало
+обновляется не чаще раза в 5 минут, между операциями одного хоста выдерживается
+60 секунд, после ошибки — 15 минут без сетевых повторов. Эти паузы переживают
+перезапуск. Один общий `--git-cache` ограничивает все процессы одной сетевой
+операцией одновременно; при занятом кэше или активной паузе запуск может
+завершиться с `GIT_ERROR`, его можно повторить позже.
+
+Передавайте clone URL, а не ссылку на страницу ветки. Credentials в URL,
+SSH, редиректы и адреса внутренней сети запрещены. HTTP разрешается отдельно
+через `--allow-http` и передаёт содержимое без шифрования. Приватные репозитории
+пока сканируются через предварительно авторизованный локальный клон.
+Кэш содержит исходную Git-историю: храните его в закрытом каталоге и учитывайте
+размер полного клона. Лимиты снижают нагрузку, но не гарантируют отсутствие
+блокировок провайдера; для разных машин нужен внешний общий ограничитель.
+
+В Python настройки передаются через `App(..., git_config=GitCollectorConfig(...),
+git_cache=...)`. Подробности: [Git Collector](docs/git_collector.md).
+
 ## Запуск с AI-валидацией (LLM)
 
 Для включения LLM-компонента передайте флаг `--ai-enabled` и задайте
@@ -68,9 +97,10 @@ python -m application scan --repository "C:\path\to\project" --database "var/sen
 ## Параметры CLI
 
 ```
-python -m application scan --repository <путь> --database <путь к БД>
+python -m application scan --repository <путь или clone URL> --database <путь к БД>
     [--mode incremental|full|targeted] [--ref main] [--batch-size 20]
     [--target-sha <SHA>] [--ai-enabled] [--poll-interval 0.25]
+    [--git-cache var/git-mirrors] [--allow-http]
 ```
 
 - `--mode` — режим сканирования: `incremental` (по умолчанию), `full`,

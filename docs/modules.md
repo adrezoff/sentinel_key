@@ -88,7 +88,14 @@ flowchart LR
 - `get_diff(sha) -> AsyncIterator[FileDiff]` — потоковый разбор diff по файлам;
 - `file_contains_in_head(path, line_matcher, *, ref=None) -> bool` — проверка `still_in_head`.
 
-Фабрика `create_git_collector(location, kind=...)`: `LocalGitCollector` (реализован), `GitHubCollector` / `GitLabCollector` (заготовки: mirror + делегирование в local).
+Фабрика `create_git_collector(location, kind=...)`: `LocalGitCollector`, общий
+`RemoteGitCollector` и совместимые адаптеры `GitHubCollector` / `GitLabCollector`.
+HTTP(S)-источник клонируется в bare-кэш без checkout и submodules; затем
+история и diff читаются локально. Обновление выполняется при `list_commits`,
+чтение diff и HEAD никогда не обращается к провайдеру.
+Один общий каталог кэша ограничивает все процессы одной сетевой операцией;
+сохранённые паузы ограничивают частоту на хост и переживают перезапуск.
+Настройки, ограничения URL и значения по умолчанию — в `git_collector.md`.
 
 **Как работает (local)**
 - Процессы — `asyncio.create_subprocess_exec` (без shell), с таймаутом; SHA валидируется до передачи в argv.
@@ -348,11 +355,11 @@ still_in_head=None)` выполняется синхронно внутри `Sto
 
 ---
 
-## 12. `application.py` — локальная точка запуска MVP
+## 12. `application.py` — точка запуска MVP
 
 `App` связывает `SqliteStorage`, `SqliteFeed`, `ScanOrchestrator`,
-`CommitWorker`, локальный `GitCollector`, `Preprocessor`, `StaticAnalyzer` и
-`IncidentManager`. При вызове `scan(...)` регистрирует локальный репозиторий,
+`CommitWorker`, фабрику `GitCollector`, `Preprocessor`, `StaticAnalyzer` и
+`IncidentManager`. При вызове `scan(...)` регистрирует локальный путь или URL,
 создаёт новый корневой запуск или возобновляет активный, планирует и выполняет
 задачи до итогового `TaskResult`. Перед циклом перевыдаёт задачи с истёкшей
 арендой. HMAC-ключ передаётся явно и не сохраняется. CLI `python -m application scan`
