@@ -1,7 +1,7 @@
 """Модели ленты задач (tasks, results, payload скана).
 
 Регистрация payload/output ``AI_VALIDATION`` — в треке ai_validation.
-``TaskKind.AI_VALIDATION`` зарезервирован, чтобы числовые значения не менялись.
+``TaskKind.AI_VALIDATION`` зарегистрирован со стабильным числовым значением 3.
 """
 
 from .commit_analysis_output import CommitAnalysisOutput

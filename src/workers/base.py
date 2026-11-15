@@ -1,4 +1,4 @@
-"""Минимальные типы для будущего общего цикла worker'а."""
+"""Общие типы обработчиков и настройки воркеров."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ class TaskHandler(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class WorkerSettings:
-    """Общие параметры claim/poll для будущего цикла worker'а."""
+    """Общие параметры claim/poll для воркеров."""
 
     worker_id: str
     kinds: tuple[TaskKind, ...]

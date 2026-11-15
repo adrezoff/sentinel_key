@@ -77,6 +77,10 @@ App связывает компоненты и выполняет их run_once/
 цикле. AI выключен по умолчанию. При включении создаёт общую LlmConfig для
 клиента и DefaultAiTaskFactory; явный llm_config имеет приоритет над окружением.
 HMAC-ключ передаётся явно; CLI читает его из environment.
+При выходе из App сначала закрывается LLM-клиент через AiWorker.aclose,
+затем SQLite в finally, включая выход с ошибкой. LlmClient.aclose освобождает
+транспорт; FakeLlmClient не владеет внешними ресурсами. Для совместимости
+внедрённые клиенты без aclose также поддерживаются.
 Параметр Python App.poll_interval_s отсутствует среди флагов CLI.
 
 ## CommitWorker

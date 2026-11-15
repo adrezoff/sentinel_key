@@ -67,6 +67,12 @@ class AiWorker:
         self.llm_client = llm_client
         self.settings = settings
 
+    async def aclose(self) -> None:
+        """Освободить транспорт клиента, если он поддерживает закрытие."""
+        close = getattr(self.llm_client, "aclose", None)
+        if close is not None:
+            await close()
+
     async def run_once(self) -> bool:
         """Обработать одну доступную задачу AI_VALIDATION."""
         task = await self.feed.claim(
