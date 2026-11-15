@@ -3,7 +3,7 @@
 Новый kind: значение в ``TaskKind``, классы payload/output, затем ``register_task_kind(...)``.
 Workers и storage смотрят сюда.
 
-``TaskKind.AI_VALIDATION`` зарезервирован (значение 3). Регистрация — в треке ai_validation.
+``TaskKind.AI_VALIDATION`` зарегистрирован со значением 3.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ class TaskKind(IntEnum):
 
     REPOSITORY_SCAN = 1
     COMMIT_ANALYSIS = 2
-    AI_VALIDATION = 3  # зарезервировано; регистрация в треке ai_validation
+    AI_VALIDATION = 3
 
 
 class TaskStatus(IntEnum):

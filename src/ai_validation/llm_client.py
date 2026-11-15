@@ -1,9 +1,9 @@
-# -*- coding: utf-8 -*-\n
+# -*- coding: utf-8 -*-
 """LLM Client: протокол и реализации для AI-валидации.
 
 Протокол ``LlmClient`` определяет интерфейс вызова LLM.
 ``FakeLlmClient`` — для тестов (возвращает заранее заданные вердикты).
-``RealLlmClient`` — заглушка для будущей интеграции с NVIDIA Nemotron 3 Ultra.
+``RealLlmClient`` использует OpenAI-совместимый API с ограниченными повторами.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import random
 import openai
 from dataclasses import dataclass, field
 from typing import Protocol
@@ -26,16 +27,16 @@ from models.candidate import Candidate
 class LlmConfig:
     """Конфигурация вызова LLM.
 
-    Значения по умолчанию под MVP; переопределяются через env / конфиг позже.
+    Значения переопределяются явно или через from_env.
     """
 
-    # Эндпоинт API (OpenAI-совместимый). Для NVIDIA Nemotron будет задан на этапе 13.
+    # Эндпоинт OpenAI-совместимого API.
     api_endpoint: str = "https://integrate.api.nvidia.com/v1"
 
     # Имя модели. Для NVIDIA Nemotron 3 Ultra: "nvidia/nemotron-3-ultra-550b-a55b"
     model: str = "nvidia/nemotron-3-ultra-550b-a55b"
 
-    # API-ключ. Читается из env SENTINEL_KEY_LLM_API_KEY на этапе 13.
+    # API-ключ. Читается из env SENTINEL_KEY_LLM_API_KEY.
     api_key: str | None = None
 
     # Температура ~0 для детерминированных ответов
@@ -61,7 +62,7 @@ class LlmConfig:
 
     @classmethod
     def from_env(cls) -> "LlmConfig":
-        """Создать конфиг из переменных окружения (для этапа 13)."""
+        """Создать конфиг из переменных окружения."""
         _defaults = cls()
         return cls(
             api_endpoint=os.getenv("SENTINEL_KEY_LLM_ENDPOINT", _defaults.api_endpoint),
@@ -93,6 +94,10 @@ class LlmClient(Protocol):
     @property
     def max_concurrent(self) -> int:
         """Лимит параллельных вызовов."""
+        ...
+
+    async def aclose(self) -> None:
+        """Освободить ресурсы транспорта после завершения работы."""
         ...
 
     async def complete(
@@ -199,6 +204,9 @@ class FakeLlmClient:
         """Очистить все заданные вердикты."""
         self._verdicts.clear()
         self.default_verdict = None
+
+    async def aclose(self) -> None:
+        """Завершить работу фейка, не владеющего внешними ресурсами."""
 
     async def complete(
         self,
@@ -343,7 +351,7 @@ def parse_llm_response(response_text: str, candidate_id: int, task_id: int, mode
 
     # confidence
     confidence = data["confidence"]
-    # Explicitly reject bool (since bool is subclass of int in Python)
+    # bool — подкласс int, но не допустимое значение confidence.
     if isinstance(confidence, bool) or not isinstance(confidence, (int, float)) or not 0.0 <= confidence <= 1.0:
         raise LlmInvalidResponseError("confidence must be float in [0.0, 1.0]")
 
@@ -409,11 +417,16 @@ class RealLlmClient:
             )
         return self._client
 
-    async def complete(self, candidate, payload) -> AiVerdict:
+    async def aclose(self) -> None:
+        """Закрыть созданную HTTP-сессию; повторный вызов безопасен."""
+        if self._client is not None:
+            await self._client.close()
+            self._client = None
+
+    async def complete(self, candidate: Candidate, payload: AiValidationPayload) -> AiVerdict:
+        """Получить валидированный вердикт с ограничением числа попыток."""
         if self._config.api_key is None:
             raise LlmAuthError('API key not configured. Set SENTINEL_KEY_LLM_API_KEY.')
-        system_prompt, user_prompt = build_prompt(candidate)
-        model = payload.model or self._config.model
         last_exception = None
         for attempt in range(1, self._config.max_attempts + 1):
             try:
@@ -432,8 +445,7 @@ class RealLlmClient:
                 last_exception = e
             if attempt < self._config.max_attempts:
                 wait_time = self._config.retry_base_s * (2 ** (attempt - 1))
-                jitter = __import__('random').uniform(0, wait_time * 0.1)
-                import asyncio
+                jitter = random.uniform(0, wait_time * 0.1)
                 await asyncio.sleep(wait_time + jitter)
         if last_exception:
             raise last_exception
@@ -455,15 +467,15 @@ class RealLlmClient:
             )
         except asyncio.TimeoutError as e:
             raise LlmTimeoutError(f'Request timed out after {self._config.timeout_s}s') from e
-        except __import__('openai').AuthenticationError as e:
+        except openai.AuthenticationError as e:
             raise LlmAuthError(f'Authentication failed: {e}') from e
-        except __import__('openai').RateLimitError as e:
+        except openai.RateLimitError as e:
             raise LlmRateLimitError(f'Rate limit exceeded: {e}') from e
-        except __import__('openai').APIConnectionError as e:
+        except openai.APIConnectionError as e:
             raise LlmNetworkError(f'Network error: {e}') from e
-        except __import__('openai').APITimeoutError as e:
+        except openai.APITimeoutError as e:
             raise LlmTimeoutError(f'Request timed out: {e}') from e
-        except __import__('openai').APIStatusError as e:
+        except openai.APIStatusError as e:
             if e.status_code in (401, 403):
                 raise LlmAuthError(f'Authentication failed: {e.status_code}') from e
             if e.status_code == 429:
@@ -471,32 +483,24 @@ class RealLlmClient:
             if 500 <= e.status_code < 600:
                 raise LlmNetworkError(f'Server error: {e.status_code}') from e
             raise LlmNetworkError(f'API error: {e.status_code}') from e
-        except __import__('openai').APIError as e:
+        except openai.APIError as e:
             raise LlmNetworkError(f'API error: {e}') from e
         
         try:
             content = completion.choices[0].message.content
-            # If content is None, try reasoning_content (Nemotron specific)
+            # Nemotron может вернуть текст в reasoning_content при отсутствии content.
             if content is None:
                 content = getattr(completion.choices[0].message, 'reasoning_content', None)
         except (KeyError, IndexError, TypeError, AttributeError) as e:
             raise LlmInvalidResponseError(f'Unexpected response structure: {e}') from e
         return parse_llm_response(content, candidate_id=0, task_id=0, model=self._config.model, prompt_version=payload.prompt_version)
 
-    def _get_client(self):
-        if self._client is None:
-            self._client = openai.AsyncOpenAI(
-                base_url=self._config.api_endpoint,
-                api_key=self._config.api_key,
-                timeout=self._config.timeout_s,
-                max_retries=0,
-            )
-        return self._client
-
     @property
-    def prompt_version(self):
+    def prompt_version(self) -> int:
+        """Вернуть версию prompt для ключа идемпотентности."""
         return self._config.prompt_version
 
     @property
-    def max_concurrent(self):
+    def max_concurrent(self) -> int:
+        """Вернуть лимит одновременных запросов."""
         return self._config.max_concurrent

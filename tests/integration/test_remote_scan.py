@@ -19,7 +19,7 @@ from git_collector.remote_cache import write_stamp
 def git(path: Path, *args: str) -> bytes:
     """Выполнить Git для временной фикстуры, не используя внешнюю сеть."""
     return subprocess.run(
-        ["git", "-C", str(path), *args], check=True, capture_output=True,
+        ["git", "-C", str(path), *args], check=True, capture_output=True, timeout=20,
     ).stdout.strip()
 
 
@@ -37,7 +37,10 @@ def remote_server(tmp_path, monkeypatch):
     git(repository, "add", ".")
     git(repository, "commit", "-qm", "Initial")
     published = tmp_path / "repo.git"
-    git(tmp_path, "clone", "--bare", str(repository), str(published))
+    # Локальный clone может зависать на Windows при копировании object database.
+    # Публикуем фикстуру через штатный push; HTTP clone проверяется ниже.
+    git(tmp_path, "init", "--bare", "-q", "-b", "main", str(published))
+    git(repository, "push", str(published), "main")
     state = {"requests": 0, "status": 200}
 
     class Handler(BaseHTTPRequestHandler):
@@ -70,7 +73,7 @@ def remote_server(tmp_path, monkeypatch):
                        REQUEST_METHOD=self.command, CONTENT_TYPE=self.headers.get("Content-Type", ""),
                        CONTENT_LENGTH=str(length), REMOTE_ADDR="127.0.0.1")
             response = subprocess.run(
-                ["git", "http-backend"], input=body, env=env, capture_output=True, check=True,
+                ["git", "http-backend"], input=body, env=env, capture_output=True, check=True, timeout=20,
             ).stdout
             headers, content = response.split(b"\r\n\r\n", 1)
             pairs = [line.decode("latin-1").split(":", 1) for line in headers.split(b"\r\n")]
@@ -105,7 +108,7 @@ def remote_server(tmp_path, monkeypatch):
 async def test_remote_app_full_repeat_fetch_and_force_push(tmp_path, remote_server):
     """Сканирование URL сохраняет идемпотентность и обрабатывает изменённый граф."""
     url, repository, published, state = remote_server
-    config = GitCollectorConfig(allow_http=True)
+    config = GitCollectorConfig(allow_http=True, remote_timeout_s=20)
     cache = tmp_path / "cache"
     fingerprint_key = secrets.token_bytes(32)
     async with App(tmp_path / "scan.db", fingerprint_key, git_cache=cache, git_config=config) as app:
@@ -152,7 +155,7 @@ async def test_http_failures_do_not_retry_or_follow_redirects(tmp_path, remote_s
     """Ошибки HTTP и редиректы не приводят к повторным сетевым запросам."""
     url, _, _, state = remote_server
     state["status"] = status
-    collector = RemoteGitCollector(url, config=GitCollectorConfig(allow_http=True), mirror_root=tmp_path / "cache")
+    collector = RemoteGitCollector(url, config=GitCollectorConfig(allow_http=True, remote_timeout_s=20), mirror_root=tmp_path / "cache")
     with pytest.raises(GitCollectorError):
         await collector.ensure_mirror()
     assert state["requests"] == 1

@@ -10,7 +10,7 @@ from models.enums import SecretType, Severity
 
 
 class AiVerdictLike(Protocol):
-    """Минимальный контракт вердикта до появления полной модели AI-ветки."""
+    """Минимальный контракт вердикта для политики инцидентов."""
 
     is_secret: bool
     confidence: float
@@ -29,7 +29,7 @@ def _default_trusted_formats() -> frozenset[SecretType]:
 
 @dataclass(frozen=True, slots=True)
 class IncidentPolicy:
-    """Пороги для локального решения и дальнейшей AI-ветки."""
+    """Пороги локального решения и проверки AI-вердикта."""
 
     min_ai_confidence: float = 0.85
     trusted_formats: frozenset[SecretType] = field(default_factory=_default_trusted_formats)

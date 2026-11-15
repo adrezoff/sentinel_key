@@ -100,9 +100,13 @@ class App:
         return self
 
     async def __aexit__(self, exc_type: object, exc: object, traceback: object) -> None:
-        """Закрыть SQLite при выходе из контекста."""
+        """Освободить LLM-транспорт и SQLite при любом выходе из контекста."""
         self._opened = False
-        await self.storage.close()
+        try:
+            if self.ai_worker is not None:
+                await self.ai_worker.aclose()
+        finally:
+            await self.storage.close()
 
     async def scan(
         self, repository_path: str | Path, payload: ScanTaskPayload | None = None
@@ -126,7 +130,7 @@ class App:
         )
         root = await self.orchestrator.start_scan(repository.id, selected_payload)
 
-        # Check if resuming a run with pending AI_VALIDATION tasks but AI is disabled
+        # Активный запуск с AI-задачами требует включённого AI-воркера.
         if not self._ai_enabled:
             pending_ai_tasks = await self.storage.read(
                 lambda session: any(
@@ -151,16 +155,11 @@ class App:
             if current is None:
                 raise RuntimeError("scan task disappeared")
             if current.is_terminal:
-                # Close AI worker if it exists
-                if self.ai_worker is not None:
-                    # AI worker will be cleaned up when the app closes
-                    pass
                 result = await self.storage.get_task_result(root.id)
                 if result is None:
                     raise RuntimeError("scan finished without a result")
                 return result
             if not progress:
-                await asyncio.sleep(self.poll_interval_s)
                 await asyncio.sleep(self.poll_interval_s)
 
 
